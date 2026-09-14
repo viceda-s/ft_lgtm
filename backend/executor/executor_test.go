@@ -85,3 +85,30 @@ func main() {
         t.Fatal("expected some stdout captured before truncation, got none")
     }
 }
+
+
+func TestExecutor_RUn_ExcessiveMemory_FailsRatherThanExhaustingHost(t *testing.T) {
+    // Allocates a large slice repeatedly to exceed the ~10MB store limit.
+    wasmBytes := compileFixture(t, `package main
+
+func main() {
+    var chunks[][]byte
+    for i := 0; i < 1000; i++ {
+        chunks = append(chunks, make([]byte, 1024*1024)) // 1MB per iteration
+    }
+    println("should not reach here:", len(chunks))
+}
+`)
+
+    exec := NewExecutor()
+    result, err := exec.Run(wasmBytes, 5*time.Second, 10*1024)
+    if err != nil {
+        t.Fatalf("Run returned infrastructure error: %v", err)
+    }
+    if result.TimedOut {
+        t.Fatal("expected memory limit to trigger before the timeout, not a timeout")
+    }
+    if result.ExitError == nil {
+        t.Fatal("expected ExitError to be set when the module exceeds its memory limit")
+    }
+}
