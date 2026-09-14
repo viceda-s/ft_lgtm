@@ -71,7 +71,17 @@ install:
 	else \
 		printf "$(GREEN)✓$(RESET) helm already installed: %s\n" "$$(helm version --short)"; \
 	fi
+	@if ! command -v tinygo >/dev/null 2>&1; then \
+		$(call run_spinner,Installing TinyGo...,\
+			curl -fsSL -o /tmp/tinygo.deb https://github.com/tinygo-org/tinygo/releases/download/v0.42.0/tinygo_0.42.0_amd64.deb && \
+			sudo dpkg -i /tmp/tinygo.deb && \
+			rm -f /tmp/tinygo.deb); \
+	else \
+		printf "$(GREEN)✓$(RESET) TinyGo already installed: %s\n" "$$(tinygo version)"; \
+	fi
+
 	@printf "$(BOLD)>> All host dependencies present.$(RESET)\n"
+	
 
 up: install
 	@if k3d cluster list | grep -q "^$(K3D_CLUSTER_NAME) "; then \
