@@ -11,7 +11,7 @@ import (
 func main() {
     exec := executor.NewExecutor()
     mux := http.NewServeMux()
-    mux.Handle("/api/execute/", api.NewHandler(exec))
+    mux.Handle("/api/execute", api.NewHandler(exec))
 
     addr := ":8080"
     log.Printf("listening on %s", addr)
