@@ -35,7 +35,7 @@ endef
 .PHONY: install uninstall up down status smoke-test
 
 install:
-	@printf "$(BOLD)>> Checking/installing host dependencies (Docker, k3d, kubectl, helm)$(RESET)\n"
+	@printf "$(BOLD)>> Checking/installing host dependencies$(RESET)\n"
 	@if ! command -v docker >/dev/null 2>&1; then \
 		$(call run_spinner,Installing Docker...,\
 			sudo apt-get update && \
@@ -94,16 +94,23 @@ install:
 	@printf "$(BOLD)>> All host dependencies present.$(RESET)\n"
 	
 uninstall:
-	@printf "$(BOLD)>> Removing host dependencies (Docker, k3d, kubectl, helm, Go, TinyGo)$(RESET)\n"
-	sudo rm -f $$(command -v k3d)
-	sudo rm -f $$(command -v helm)
-	sudo rm -f $$(command -v kubectl)
-	sudo apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-	sudo rm -rf /var/lib/docker /var/lib/containerd
-	sudo rm -f /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.gpg
-	sudo rm -rf /usr/local/go /usr/local/bin/go /usr/local/bin/gofmt
-	sudo rm -f $$(command -v tinygo)
+	@printf "$(BOLD)>> Removing host dependencies$(RESET)\n"
+	@$(call run_spinner,Removing k3d...,\
+		sudo rm -f $$(command -v k3d))
+	@$(call run_spinner,Removing helm...,\
+		sudo rm -f $$(command -v helm))
+	@$(call run_spinner,Removing kubectl...,\
+		sudo rm -f $$(command -v kubectl))
+	@$(call run_spinner,Removing Docker...,\
+		sudo apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin && \
+		sudo rm -rf /var/lib/docker /var/lib/containerd && \
+		sudo rm -f /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.gpg)
+	@$(call run_spinner,Removing Go...,\
+		sudo rm -rf /usr/local/go /usr/local/bin/go /usr/local/bin/gofmt)
+	@$(call run_spinner,Removing TinyGo...,\
+		sudo rm -f $$(command -v tinygo))
 	@printf "$(BOLD)>> Host dependencies removed.$(RESET)\n"
+
 
 up: install
 	@if k3d cluster list | grep -q "^$(K3D_CLUSTER_NAME) "; then \
