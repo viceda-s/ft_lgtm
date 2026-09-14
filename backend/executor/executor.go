@@ -105,16 +105,19 @@ func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes i
     if callErr != nil {
         if trap, ok := callErr.(*wasmtime.Trap); ok && trap.Code() != nil && *trap.Code() == wasmtime.Interrupt {
             result.TimedOut = true
-        } else if exitCode, ok := wasmtime.ExitStatus(callErr); ok {
-            if exitCode != 0 {
+        } else if wasmErr, ok := callErr.(*wasmtime.Error); ok {
+            if exitCode, isExit := wasmErr.ExitStatus(); isExit {
+                if exitCode != 0 {
+                    result.ExitError = callErr
+                }
+                // exitCode == 0: clean WASI exit, not an error
+            } else {
                 result.ExitError = callErr
             }
         } else {
             result.ExitError = callErr
         }
     }
-
-
     return result, nil
 }
 
