@@ -32,7 +32,7 @@ define run_spinner
 	exit $$status
 endef
 
-.PHONY: install up down status
+.PHONY: install up down status smoke-test
 
 install:
 	@printf "$(BOLD)>> Checking/installing host dependencies (Docker, k3d, kubectl, helm)$(RESET)\n"
@@ -83,6 +83,15 @@ up: install
 	kubectl config use-context k3d-$(K3D_CLUSTER_NAME)
 	@printf "$(BOLD)>> Cluster is up. Nodes:$(RESET)\n"
 	kubectl get nodes
+	@printf "$(BOLD)>> Installing ingress-nginx$(RESET)\n"
+	@$(call run_spinner,Installing ingress-nginx...,\
+			helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx --force-update && \
+			helm repo update && \
+			helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+				 --namespace ingress-nginx --create-namespace \
+				 --set controller.service.type=LoadBalancer \
+				 --wait --timeout 180s)
+	@printf "$(BOLD)>> Ingress-nginx is ready.$(RESET)\n"
 
 down:
 	@printf "$(BOLD)>> Deleting k3d cluster '$(K3D_CLUSTER_NAME)'$(RESET)\n"
@@ -91,3 +100,8 @@ down:
 status:
 	@k3d cluster list
 	@kubectl get nodes 2>/dev/null || true
+	@kubectl get pods -n ingress-nginx 2>/dev/null || true
+
+smoke-test:
+	@printf "$(BOLD)>> Expecting HTTP 404 from ingress-nginx's default backend$(RESET)\n"
+	curl -i 127.0.0.1
