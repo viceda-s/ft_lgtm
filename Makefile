@@ -71,6 +71,17 @@ install:
 	else \
 		printf "$(GREEN)✓$(RESET) helm already installed: %s\n" "$$(helm version --short)"; \
 	fi
+	@if ! command -v go >/dev/null 2>&1; then \
+		$(call run_spinner,Installing Go...,\
+			curl -fsSL -o /tmp/go.tar.gz https://go.dev/dl/go1.23.4.linux-amd64.tar.gz && \
+			sudo rm -rf /usr/local/go && \
+			sudo tar -C /usr/local -xzf /tmp/go.tar.gz && \
+			sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go && \
+			sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt && \
+			rm -f /tmp/go.tar.gz); \
+	else \
+		printf "$(GREEN)✓$(RESET) Go already installed: %s\n" "$$(go version)"; \
+	fi
 	@if ! command -v tinygo >/dev/null 2>&1; then \
 		$(call run_spinner,Installing TinyGo...,\
 			curl -fsSL -o /tmp/tinygo.deb https://github.com/tinygo-org/tinygo/releases/download/v0.42.0/tinygo_0.42.0_amd64.deb && \
