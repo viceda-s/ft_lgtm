@@ -81,11 +81,11 @@ func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes i
     }
 
     deadline := make(chan struct{})
-    go func{
+    go func() {
         select {
-            case <-time.After(timeout):
-                e.engine.IncrementEpoch()
-            case <-deadline:
+        case <-time.After(timeout):
+            e.engine.IncrementEpoch()
+        case <-deadline:
         }
     }()
 
