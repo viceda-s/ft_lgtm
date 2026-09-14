@@ -62,7 +62,7 @@ func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes i
 	store.SetWasi(wasiConfig)
 
 	linker := wasmtime.NewLinker(e.engine)
-	if err := linker.DefineWASI(); err != nil {
+	if err := linker.DefineWasi(); err != nil {
 		return Result{}, fmt.Errorf("defining WASI imports: %w", err)
 	}
 
