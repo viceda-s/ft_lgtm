@@ -32,7 +32,7 @@ define run_spinner
 	exit $$status
 endef
 
-.PHONY: install up down status smoke-test
+.PHONY: install uninstall up down status smoke-test
 
 install:
 	@printf "$(BOLD)>> Checking/installing host dependencies (Docker, k3d, kubectl, helm)$(RESET)\n"
@@ -73,7 +73,7 @@ install:
 	fi
 	@if ! command -v go >/dev/null 2>&1; then \
 		$(call run_spinner,Installing Go...,\
-			curl -fsSL -o /tmp/go.tar.gz https://go.dev/dl/go1.23.4.linux-amd64.tar.gz && \
+			curl -fsSL -o /tmp/go.tar.gz https://go.dev/dl/go1.27.0.linux-amd64.tar.gz && \
 			sudo rm -rf /usr/local/go && \
 			sudo tar -C /usr/local -xzf /tmp/go.tar.gz && \
 			sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go && \
@@ -93,6 +93,17 @@ install:
 
 	@printf "$(BOLD)>> All host dependencies present.$(RESET)\n"
 	
+uninstall:
+	@printf "$(BOLD)>> Removing host dependencies (Docker, k3d, kubectl, helm, Go, TinyGo)$(RESET)\n"
+	sudo rm -f $$(command -v k3d)
+	sudo rm -f $$(command -v helm)
+	sudo rm -f $$(command -v kubectl)
+	sudo apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+	sudo rm -rf /var/lib/docker /var/lib/containerd
+	sudo rm -f /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.gpg
+	sudo rm -rf /usr/local/go /usr/local/bin/go /usr/local/bin/gofmt
+	sudo rm -f $$(command -v tinygo)
+	@printf "$(BOLD)>> Host dependencies removed.$(RESET)\n"
 
 up: install
 	@if k3d cluster list | grep -q "^$(K3D_CLUSTER_NAME) "; then \
