@@ -87,7 +87,7 @@ func main() {
 }
 
 
-func TestExecutor_RUn_ExcessiveMemory_FailsRatherThanExhaustingHost(t *testing.T) {
+func TestExecutor_Run_ExcessiveMemory_FailsRatherThanExhaustingHost(t *testing.T) {
     // Allocates a large slice repeatedly to exceed the ~10MB store limit.
     wasmBytes := compileFixture(t, `package main
 
