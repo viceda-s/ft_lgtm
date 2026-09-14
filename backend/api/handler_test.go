@@ -1,0 +1,41 @@
+package api
+
+import (
+    "encoding/json"
+    "net/http"
+    "net/http/httptest"
+    "strings"
+    "testing"
+
+    "ft_lgtm/backend/executor"
+)
+
+
+func TestHandler_ValidCode_ReturnsStdoutAndSuccess(t *testing.T) {
+    exec := executor.NewExecutor()
+    handler := NewHandler(exec)
+
+    body := `{"code": "package main\n\n func main() {\n\tprintln(\"Hello\")\n\t}\n"}`
+    req := httptest.NewRequest(http.MethodPost, "/api/execute/", strings.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    rec := httptest.NewRecorder()
+
+    handler.ServeHTTP(rec, req)
+
+    if rec.Code != http.StatusOK {
+        t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+    }
+
+    var resp ExecuteResponse
+    if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+        t.Fatalf("failed to decode response: %v", err)
+    }
+
+    if !resp.Success {
+        t.Fatalf("expected Success=true, got response: %+v", resp)
+    }
+
+    if resp.Stdout == "" {
+        t.Fatal("expected non-empty stdout")
+    }
+}
