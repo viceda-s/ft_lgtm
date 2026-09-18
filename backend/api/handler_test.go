@@ -323,3 +323,122 @@ func TestHandler_InvalidCode_RootSpanHasCodeHash(t *testing.T) {
 		t.Fatal("expected root span status to carry a non-empty cose.hash attribute even for a compile error")
 	}
 }
+
+func TestHandler_ValidCode_RecordsCompileChildSpan(t *testing.T) {
+	recorder := withTestTracerProvider(t)
+	exec := executor.NewExecutor()
+	uploader := &fakeUploader{cid: "babyFAKECID"}
+	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
+
+	body := `{"code": "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	spans := recorder.Ended()
+	var root, compile sdktrace.ReadOnlySpan
+	for _, s := range spans {
+		switch s.Name() {
+		case "/api/execute":
+			root = s
+		case "compile":
+			compile = s
+		}
+	}
+	if root == nil {
+		t.Fatal("expected a span named \"/api/execute\"")
+	}
+	if compile == nil {
+		t.Fatalf("expected a span named \"compile\" among %d recorded spans", len(spans))
+	}
+	if compile.Parent().SpanID() != root.SpanContext().SpanID() {
+		t.Fatalf("expected \"compile\" span's parent to be then root span")
+	}
+}
+
+func TestHandler_ValidCode_RecordsExecuteChildSpan(t *testing.T) {
+	recorder := withTestTracerProvider(t)
+	exec := executor.NewExecutor()
+	uploader := &fakeUploader{cid: "babyFAKECID"}
+	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
+
+	body := `{"code": "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	spans := recorder.Ended()
+	var execute sdktrace.ReadOnlySpan
+	for _, s := range spans {
+		if s.Name() == "execute" {
+			execute = s
+		}
+	}
+	if execute == nil {
+		t.Fatalf("expected a span named \"execute\" among %d recorded spans", len(spans))
+	}
+	if execute.Status().Code == codes.Error {
+		t.Fatalf("expected \"execute\" span status not to be Error for a compile successful run, got: %s", execute.Status().Description)
+	}
+}
+
+func TestHandler_RuntimeFailure_ExecuteSpanHasErrorStatus(t *testing.T) {
+	recorder := withTestTracerProvider(t)
+	exec := executor.NewExecutor()
+	uploader := &fakeUploader{cid: "babyFAKECID"}
+	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
+
+	body := `{"code": "package main\n\nfunc main() {\n\tvar s []int\n\t_ = s[5]\n}\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	spans := recorder.Ended()
+	var execute sdktrace.ReadOnlySpan
+	for _, s := range spans {
+		if s.Name() == "execute" {
+			execute = s
+		}
+	}
+	if execute == nil {
+		t.Fatal("expected a span named \"/api/execute\"")
+	}
+	if execute.Status().Code != codes.Error {
+		t.Fatalf("expected \"execute\" span status not to be Error for a runtime panic, got: %s", execute.Status().Code)
+	}
+}
+
+
+func TestHandler_Timeout_ExecuteSpanHasErrorStatus(t *testing.T) {
+	recorder := withTestTracerProvider(t)
+	exec := executor.NewExecutor()
+	uploader := &fakeUploader{cid: "babyFAKECID"}
+	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
+
+	body := `{"code": "package main\n\nfunc main() {\n\tfor {}\n}\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	spans := recorder.Ended()
+	var execute sdktrace.ReadOnlySpan
+	for _, s := range spans {
+		if s.Name() == "execute" {
+			execute = s
+		}
+	}
+	if execute == nil {
+		t.Fatal("expected a span named \"/api/execute\"")
+	}
+	if execute.Status().Code != codes.Error {
+		t.Fatalf("expected \"execute\" span status not to be Error for a timeout: %s", execute.Status().Code)
+	}
+}

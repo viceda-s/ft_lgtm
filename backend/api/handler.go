@@ -111,7 +111,7 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		counter.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("outcome", outcome))))
 	}()
 
-	wasmBytes, err := compiler.Compile(r.Context(), req.Code)
+	wasmBytes, err := h.compileWithSpan(ctx, req.Code)
 	if err != nil {
 		outcome = "compile_error"
 		span.SetStatus(codes.Error, "compile failed")
@@ -126,7 +126,7 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.exec.Run(wasmBytes, executionTimeout, maxOutputBytes)
+	result, err := h.runWithSpan(ctx, wasmBytes)
 	if err != nil {
 		outcome = "runtime_error"
 		span.SetStatus(codes.Error, "execution error")
@@ -167,11 +167,32 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 func (h *executeHandler) compileWithSpan(ctx context.Context, source string) ([]byte, error) {
-	return compiler.Compile(ctx, source)
+	ctx, span := tracer().Start(ctx, "compile")
+	defer span.End()
+
+	wasmBytes, err := compiler.Compile(ctx, source)
+	if err != nil {
+		span.SetStatus(codes.Error, "compile failed")
+		return nil, err
+	}
+	return wasmBytes, nil
 }
 
 func (h *executeHandler) runWithSpan(ctx context.Context, wasmBytes []byte) (executor.Result, error) {
-	return h.exec.Run(wasmBytes, executionTimeout, maxOutputBytes)
+	_, span := tracer().Start(ctx, "execute")
+	defer span.End()
+
+	result, err := h.exec.Run(wasmBytes, executionTimeout, maxOutputBytes)
+	if err != nil {
+		span.SetStatus(codes.Error, "execution error")
+		return result, err
+	}
+	if result.TimedOut {
+		span.SetStatus(codes.Error, "execution timed out")
+	} else if result.ExitError != nil {
+		span.SetStatus(codes.Error, result.ExitError.Error())
+	}
+	return result, nil
 }
 
 func (h *executeHandler) uploadWithSpan(ctx context.Context, source, stdout, stderr string) (string, error) {

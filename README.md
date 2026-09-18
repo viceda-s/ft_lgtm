@@ -15,8 +15,7 @@ The goal is to demonstrate, end to end, how modern applications combine sandboxe
 The entire project runs inside a local Kubernetes cluster (k3d) provisioned by a single `Makefile`.
 
 ```bash
-make up      # installs host dependencies, creates the k3d cluster,
-             # deploys ingress-nginx and Kubo (IPFS)
+make up      # installs host dependencies, creates the k3d cluster, deploys ingress-nginx and Kubo (IPFS)
 make down    # tears down the k3d cluster
 make status  # shows cluster/pod status
 ```
