@@ -196,7 +196,17 @@ func (h *executeHandler) runWithSpan(ctx context.Context, wasmBytes []byte) (exe
 }
 
 func (h *executeHandler) uploadWithSpan(ctx context.Context, source, stdout, stderr string) (string, error) {
+	ctx, span := tracer().Start(ctx, "ipfs_upload")
+	defer span.End()
+
 	uploadCtx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
 	defer cancel()
-	return h.uploader.Upload(uploadCtx, source, stdout, stderr)
+
+	cid, err := h.uploader.Upload(uploadCtx, source, stdout, stderr)
+	if err != nil {
+		span.SetStatus(codes.Error, "ipfs upload failed")
+		return "", err
+	}
+	span.SetAttributes(attribute.String("code.cid", cid))
+	return cid, nil
 }

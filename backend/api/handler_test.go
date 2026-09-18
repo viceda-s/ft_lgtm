@@ -237,7 +237,7 @@ func withTestTracerProvider(t *testing.T) *tracetest.SpanRecorder {
 func TestHandler_ValidCode_RecordsRootSpan(t *testing.T) {
 	recorder := withTestTracerProvider(t)
 	exec := executor.NewExecutor()
-	uploader := &fakeUploader{cid: "babyFAKECID"}
+	uploader := &fakeUploader{cid: "bafyFAKECID"}
 	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
 
 	body := `{"code": "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"}`
@@ -265,7 +265,7 @@ func TestHandler_ValidCode_RecordsRootSpan(t *testing.T) {
 func TestHandler_InvalidCode_RootSpanHasErrorStatus(t *testing.T) {
 	recorder := withTestTracerProvider(t)
 	exec := executor.NewExecutor()
-	uploader := &fakeUploader{cid: "babyFAKECID"}
+	uploader := &fakeUploader{cid: "bafyFAKECID"}
 	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
 
 	body := `{"code": "package main\n\nfunc main() {\n\tthis is not a valid syntax\n}\n"}`
@@ -293,7 +293,7 @@ func TestHandler_InvalidCode_RootSpanHasErrorStatus(t *testing.T) {
 func TestHandler_InvalidCode_RootSpanHasCodeHash(t *testing.T) {
 	recorder := withTestTracerProvider(t)
 	exec := executor.NewExecutor()
-	uploader := &fakeUploader{cid: "babyFAKECID"}
+	uploader := &fakeUploader{cid: "bafyFAKECID"}
 	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
 
 	body := `{"code": "package main\n\nfunc main() {\n\tthis is not a valid syntax\n}\n"}`
@@ -327,7 +327,7 @@ func TestHandler_InvalidCode_RootSpanHasCodeHash(t *testing.T) {
 func TestHandler_ValidCode_RecordsCompileChildSpan(t *testing.T) {
 	recorder := withTestTracerProvider(t)
 	exec := executor.NewExecutor()
-	uploader := &fakeUploader{cid: "babyFAKECID"}
+	uploader := &fakeUploader{cid: "bafyFAKECID"}
 	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
 
 	body := `{"code": "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"}`
@@ -361,7 +361,7 @@ func TestHandler_ValidCode_RecordsCompileChildSpan(t *testing.T) {
 func TestHandler_ValidCode_RecordsExecuteChildSpan(t *testing.T) {
 	recorder := withTestTracerProvider(t)
 	exec := executor.NewExecutor()
-	uploader := &fakeUploader{cid: "babyFAKECID"}
+	uploader := &fakeUploader{cid: "bafyFAKECID"}
 	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
 
 	body := `{"code": "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"}`
@@ -389,7 +389,7 @@ func TestHandler_ValidCode_RecordsExecuteChildSpan(t *testing.T) {
 func TestHandler_RuntimeFailure_ExecuteSpanHasErrorStatus(t *testing.T) {
 	recorder := withTestTracerProvider(t)
 	exec := executor.NewExecutor()
-	uploader := &fakeUploader{cid: "babyFAKECID"}
+	uploader := &fakeUploader{cid: "bafyFAKECID"}
 	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
 
 	body := `{"code": "package main\n\nfunc main() {\n\tvar s []int\n\t_ = s[5]\n}\n"}`
@@ -414,11 +414,10 @@ func TestHandler_RuntimeFailure_ExecuteSpanHasErrorStatus(t *testing.T) {
 	}
 }
 
-
 func TestHandler_Timeout_ExecuteSpanHasErrorStatus(t *testing.T) {
 	recorder := withTestTracerProvider(t)
 	exec := executor.NewExecutor()
-	uploader := &fakeUploader{cid: "babyFAKECID"}
+	uploader := &fakeUploader{cid: "bafyFAKECID"}
 	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
 
 	body := `{"code": "package main\n\nfunc main() {\n\tfor {}\n}\n"}`
@@ -440,5 +439,88 @@ func TestHandler_Timeout_ExecuteSpanHasErrorStatus(t *testing.T) {
 	}
 	if execute.Status().Code != codes.Error {
 		t.Fatalf("expected \"execute\" span status not to be Error for a timeout: %s", execute.Status().Code)
+	}
+}
+
+func TestHandler_ValidCode_RecordsIPFSUploadChildSpanWithCID(t *testing.T) {
+	recorder := withTestTracerProvider(t)
+	exec := executor.NewExecutor()
+	uploader := &fakeUploader{cid: "bafyFAKECID"}
+	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
+
+	body := `{"code": "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	spans := recorder.Ended()
+	var upload sdktrace.ReadOnlySpan
+	for _, s := range spans {
+		if s.Name() == "ipfs_upload" {
+			upload = s
+		}
+	}
+	if upload == nil {
+		t.Fatalf("expected a span named \"ipfs_upload\" among %d recorded spans", len(spans))
+	}
+	found := false
+	for _, attr := range upload.Attributes() {
+		if attr.Key == "code.cid" && attr.Value.AsString() == "bafyFAKECID" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected \"ipfs_upload\" span to carry code.cid=bafyFAKECID attribute")
+	}
+}
+
+func TestHandler_UploadFails_IPFSUploadSpanHasErrorStatus(t *testing.T) {
+	recorder := withTestTracerProvider(t)
+	exec := executor.NewExecutor()
+	uploader := &fakeUploader{err: errors.New("connection refused")}
+	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
+
+	body := `{"code": "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	spans := recorder.Ended()
+	var upload sdktrace.ReadOnlySpan
+	for _, s := range spans {
+		if s.Name() == "ipfs_upload" {
+			upload = s
+		}
+	}
+	if upload == nil {
+		t.Fatal("expected a span named \"ipfs_upload\"")
+	}
+	if upload.Status().Code != codes.Error {
+		t.Fatalf("expected \"ipfs_upload\" span status  Error when upload fails, got: %s", upload.Status().Code)
+	}
+}
+
+func TestHandler_InvalidCode_NoIPFSUploadSpan(t *testing.T) {
+	recorder := withTestTracerProvider(t)
+	exec := executor.NewExecutor()
+	uploader := &fakeUploader{cid: "bafyFAKECID"}
+	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
+
+	body := `{"code": "package main\n\nfunc main() {\n\tthis is not a valid syntax\n}\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	spans := recorder.Ended()
+	for _, s := range spans {
+		if s.Name() == "ipfs_upload" {
+			t.Fatal("expected no \"ipfs_upload\" span for a compile error")
+		}
 	}
 }
