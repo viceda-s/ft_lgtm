@@ -43,7 +43,8 @@ func main() {
 
 	ipfsClient, err := ipfs.NewClient(ipfsAPIURL)
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		return
 	}
 
 	exec := executor.NewExecutor()
@@ -54,6 +55,6 @@ func main() {
 	log.Printf("listening on %s (ipfs api=%s gateway=%s otlp endpoint=%s)",
 		addr, ipfsAPIURL, ipfsGatewayURL, getEnvOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"))
 	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Fatal(err)
+		log.Print(err)
 	}
 }
