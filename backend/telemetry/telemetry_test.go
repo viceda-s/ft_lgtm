@@ -12,7 +12,6 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
-
 // testOTLPEndpoint returns the value of OTEL_TEST_ENDPOINT (e.g. "127.0.0.1:4317" pointed at a real local otel-collector or a throwaway gRPC OTLP receiver), skipping the test if unset.
 // Tests in this file that need a real network round-trip use this; tests that only need to assert span/metric structure use the in-memory recorders instead (Step 5+).
 func testOTLPEndpoint(t *testing.T) string {
@@ -24,10 +23,9 @@ func testOTLPEndpoint(t *testing.T) string {
 	return endpoint
 }
 
-
 func TestInit_ValidEndpoint_ReturnsWorkingShutdown(t *testing.T) {
 	endpoint := testOTLPEndpoint(t)
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+endpoint)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -47,7 +45,6 @@ func TestInit_ValidEndpoint_ReturnsWorkingShutdown(t *testing.T) {
 	}
 }
 
-
 func TestInit_NoEndpointConfigured_UsesDefaultWithoutError(t *testing.T) {
 	// No OTEL_EXPORTER_OTLP_ENDPOINT set: Init must still succeed (the SDK defaults to localhost:4317 and only fails at actual export time, not at construction time) — this test runs unconditionally, no real collector needed, since gRPC exporter construction doesn't dial eagerly.
 	os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -65,7 +62,6 @@ func TestInit_NoEndpointConfigured_UsesDefaultWithoutError(t *testing.T) {
 	_ = shutdown(shutdownCtx) // best-effort; no real collector to flush to
 }
 
-
 // unusedPort finds a TCP port nothing is listening on, for the unreachable endpoint test below.
 func unusedPort(t *testing.T) string {
 	t.Helper()
@@ -76,7 +72,6 @@ func unusedPort(t *testing.T) string {
 	defer l.Close()
 	return l.Addr().String()
 }
-
 
 func TestInit_UnreachableEndpoint_ConstructionStillSucceeds(t *testing.T) {
 	// gRPC exporters connect lazily — Init must not block on or fail from an unreachable endpoint at construction time (only actual span/metric export attempts would time out later, which is the SDK's own documented behavior, not something this package adds).
@@ -94,7 +89,6 @@ func TestInit_UnreachableEndpoint_ConstructionStillSucceeds(t *testing.T) {
 	defer shutdownCancel()
 	_ = shutdown(shutdownCtx)
 }
-
 
 func TestSpanRecording_ChildSpanWithAttribute_IsCaptured(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()

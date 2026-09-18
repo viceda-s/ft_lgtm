@@ -16,6 +16,8 @@ import (
 
 // Init registers a real OTLP/gRPC-exporting TraceProvider and MeterProvider as the global providers and returns a shutdown func.
 // Callers elsewhere use otel.Tracer(name)/otel.Meter(name) directly, not this package.
+//
+// If OTEL_EXPORTER_OTLP_ENDPOINT is set explicitly, it must include a scheme (e.g. "http://otel-collector:4317") — without one, the SDK's URL parser silently resolves an empty address and exports fail later with "missing address".
 func Init(ctx context.Context, serviceName string) (func(context.Context) error, error) {
 	res, err := resource.Merge(
 		resource.Default(),
