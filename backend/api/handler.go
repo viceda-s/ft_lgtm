@@ -199,7 +199,7 @@ func (h *executeHandler) uploadWithSpan(ctx context.Context, source, stdout, std
 	ctx, span := tracer().Start(ctx, "ipfs_upload")
 	defer span.End()
 
-	uploadCtx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
+	uploadCtx, cancel := context.WithTimeout(ctx, uploadTimeout)
 	defer cancel()
 
 	cid, err := h.uploader.Upload(uploadCtx, source, stdout, stderr)
