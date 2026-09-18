@@ -2,117 +2,180 @@ package api
 
 import (
 	"context"
-    "encoding/json"
-    "errors"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"log"
-    "net/http"
-    "strings"
+	"net/http"
+	"strings"
+	"sync"
 	"time"
 
-    "ft_lgtm/backend/compiler"
-    "ft_lgtm/backend/executor"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+
+	"ft_lgtm/backend/compiler"
+	"ft_lgtm/backend/executor"
 )
 
 const executionTimeout = 5 * time.Second
 const maxOutputBytes = 10 * 1024
 
-
 // uploadTimeout is the maximum time spent uploading execution results to IPFS. It is independent of executionTimeout and can be tuned separately.
 const uploadTimeout = 5 * time.Second
 
+func tracer() trace.Tracer { return otel.Tracer("ft_lgtm/backend/api") }
+
+var (
+	executionsCounterOnce       sync.Once
+	executionsCounterInstrument metric.Int64Counter
+	executionsCounterErr        error
+)
+
+func executionsCounter() (metric.Int64Counter, error) {
+	executionsCounterOnce.Do(func() {
+		executionsCounterInstrument, executionsCounterErr = otel.Meter("ft_lgtm/backend/api").Int64Counter(
+			"code_executions_total",
+			metric.WithDescription("Total number of code executions, labeled by outcome"),
+		)
+	})
+	return executionsCounterInstrument, executionsCounterErr
+}
 
 // Uploader is satisfied by *ipfs.Client. It lives here (not in the ipfs package) so api can depend on it without ipfs needing to import api, and so handler tests can substitute a network-free fake.
 type Uploader interface {
-    Upload(ctx context.Context, source, stdout, stderr string) (string, error)
+	Upload(ctx context.Context, source, stdout, stderr string) (string, error)
 }
-
 
 // ExecuteRequest is the JSON body for POST /api/execute
 type ExecuteRequest struct {
-    Code string `json:"code"`
+	Code string `json:"code"`
 }
-
 
 // ExecuteResponse is the JSON body returned by POST /api/execute
 type ExecuteResponse struct {
-    Stdout       string `json:"stdout"`
-    Stderr       string `json:"stderr"`
-    Success      bool   `json:"success"`
-    TimedOut     bool   `json:"timed_out"`
-    CompileError string `json:"compile_error,omitempty"`
-    IPFSLink     string `json:"ipfs_link,omitempty"`
+	Stdout       string `json:"stdout"`
+	Stderr       string `json:"stderr"`
+	Success      bool   `json:"success"`
+	TimedOut     bool   `json:"timed_out"`
+	CompileError string `json:"compile_error,omitempty"`
+	IPFSLink     string `json:"ipfs_link,omitempty"`
 }
-
 
 type executeHandler struct {
-    exec        *executor.Executor
-    uploader    Uploader
-    gatewayURL  string
+	exec       *executor.Executor
+	uploader   Uploader
+	gatewayURL string
 }
-
 
 // NewHandler returns the POST /api/execute HTTP handler.
 // It compiles the submitted source with TinyGo, runs the result through exec inside its sandboxed Wasmtime store, uploads the source and output to IPFS via uploader, and reports the outcome as JSON.
 // gatewayURL is the public IPFS gateway base (e.g. "http://ipfs.lgtm.local"), used to build IPFSLink.
 func NewHandler(exec *executor.Executor, uploader Uploader, gatewayURL string) http.Handler {
-    if uploader == nil {
-        panic("api: NewHandler called with nil uploader")
-    }
-    return &executeHandler{exec: exec, uploader: uploader, gatewayURL: strings.TrimRight(gatewayURL, "/")}
+	if uploader == nil {
+		panic("api: NewHandler called with nil uploader")
+	}
+	return &executeHandler{exec: exec, uploader: uploader, gatewayURL: strings.TrimRight(gatewayURL, "/")}
 }
 
 func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-    if r.Method != http.MethodPost {
-        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-    var req ExecuteRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        http.Error(w, "invalid request body", http.StatusBadRequest)
-        return
-    }
+	var req ExecuteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
 
-    wasmBytes, err := compiler.Compile(r.Context(), req.Code)
-    if err != nil {
-        resp := ExecuteResponse{Success: false}
-        var compileErr *compiler.CompileError
-        if errors.As(err, &compileErr) {
-            resp.CompileError = compileErr.Stderr
-        } else {
-            resp.CompileError = err.Error()
-        }
-        writeJSON(w, http.StatusOK, resp)
-        return
-    }
+	ctx, span := tracer().Start(r.Context(), "/api/execute")
+	defer span.End()
 
-    result, err := h.exec.Run(wasmBytes, executionTimeout, maxOutputBytes)
-    if err != nil {
-        http.Error(w, "internal execution error", http.StatusInternalServerError)
-        return
-    }
+	hash := sha256.Sum256([]byte(req.Code))
+	codeHash := hex.EncodeToString(hash[:])
+	span.SetAttributes(attribute.String("code.hash", codeHash))
 
-    resp := ExecuteResponse{
-        Stdout:   result.Stdout,
-        Stderr:   result.Stderr,
-        TimedOut: result.TimedOut,
-        Success:  !result.TimedOut && result.ExitError == nil,
-    }
+	outcome := "success"
+	defer func() {
+		counter, err := executionsCounter()
+		if err != nil {
+			log.Printf("telemetry: constructing executions counter: %v", err)
+			return
+		}
+		counter.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("outcome", outcome))))
+	}()
 
-    uploadCtx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
-    defer cancel()
-    cid, uploadErr := h.uploader.Upload(uploadCtx, req.Code, result.Stdout, result.Stderr)
-    if uploadErr != nil {
-        log.Printf("ipfs upload failed: %v", uploadErr)
-    } else {
-        resp.IPFSLink = h.gatewayURL + "/ipfs/" + cid
-    }
+	wasmBytes, err := compiler.Compile(r.Context(), req.Code)
+	if err != nil {
+		outcome = "compile_error"
+		span.SetStatus(codes.Error, "compile failed")
+		resp := ExecuteResponse{Success: false}
+		var compileErr *compiler.CompileError
+		if errors.As(err, &compileErr) {
+			resp.CompileError = compileErr.Stderr
+		} else {
+			resp.CompileError = err.Error()
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 
-    writeJSON(w, http.StatusOK, resp)
+	result, err := h.exec.Run(wasmBytes, executionTimeout, maxOutputBytes)
+	if err != nil {
+		outcome = "runtime_error"
+		span.SetStatus(codes.Error, "execution error")
+		http.Error(w, "internal execution error", http.StatusInternalServerError)
+		return
+	}
+
+	resp := ExecuteResponse{
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
+		TimedOut: result.TimedOut,
+		Success:  !result.TimedOut && result.ExitError == nil,
+	}
+
+	if result.TimedOut {
+		outcome = "timeout"
+		span.SetStatus(codes.Error, "execution timed out")
+	} else if result.ExitError != nil {
+		outcome = "runtime_error"
+		span.SetStatus(codes.Error, result.ExitError.Error())
+	}
+
+	cid, uploadErr := h.uploadWithSpan(ctx, req.Code, result.Stdout, result.Stderr)
+	if uploadErr != nil {
+		log.Printf("ipfs upload failed: %v", uploadErr)
+	} else {
+		resp.IPFSLink = h.gatewayURL + "/ipfs/" + cid
+		span.SetAttributes(attribute.String("code.cid", cid))
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(status)
-    json.NewEncoder(w).Encode(v)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func (h *executeHandler) compileWithSpan(ctx context.Context, source string) ([]byte, error) {
+	return compiler.Compile(ctx, source)
+}
+
+func (h *executeHandler) runWithSpan(ctx context.Context, wasmBytes []byte) (executor.Result, error) {
+	return h.exec.Run(wasmBytes, executionTimeout, maxOutputBytes)
+}
+
+func (h *executeHandler) uploadWithSpan(ctx context.Context, source, stdout, stderr string) (string, error) {
+	uploadCtx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
+	defer cancel()
+	return h.uploader.Upload(uploadCtx, source, stdout, stderr)
 }
