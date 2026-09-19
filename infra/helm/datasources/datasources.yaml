@@ -3,7 +3,7 @@ kind: ConfigMap
 metadata:
   name: grafana-datasources
   labels:
-    grafana_datasources: "1"
+    grafana_datasource: "1"
 data:
   datasources.yaml: |
     apiVersion: 1
@@ -16,7 +16,7 @@ data:
         isDefault: true
         jsonData:
           exemplarTraceIDDestinations:
-            - name: trace_is
+            - name: trace_id
               datasourceUid: tempo
 
       - name: Tempo
@@ -32,7 +32,7 @@ data:
             filterByTraceID: true
             tags: []
           tracesToMetrics:
-            datasourceUid: tempo
+            datasourceUid: mimir
             tags:
               - key: service.name
                 value: service_name
