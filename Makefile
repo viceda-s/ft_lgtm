@@ -35,7 +35,7 @@ define run_spinner
 	exit $$status
 endef
 
-.PHONY: install uninstall up down status smoke-test deploy-kubo
+.PHONY: install uninstall up down status smoke-test deploy-kubo deploy-lgtm-stack
 
 install:
 	@printf "$(FIND) $(BOLD)Checking/installing host dependencies$(RESET)\n"
@@ -78,6 +78,13 @@ install:
 	else \
 		printf "$(CHECK) helm already installed: %s\n" "$$(helm version --short)"; \
 	fi
+	@$(call run_spinner,Adding Helm repos...,\
+		helm repo add grafana https://grafana.github.io/helm-charts --force-update && \
+		helm repo add grafana-community https://grafana-community.github.io/helm-charts --force-update && \
+		helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts --force-update && \
+		helm repo update)
+	@printf "$(CHECK) $(BOLD)Helm repos added.$(RESET)\n"
+	@echo
 	@if ! command -v go >/dev/null 2>&1; then \
 		$(call run_spinner,Installing Go...,\
 			curl -fsSL -o /tmp/go.tar.gz https://go.dev/dl/go1.27.0.linux-amd64.tar.gz && \
@@ -155,13 +162,60 @@ up: install
 	@echo
 
 	@$(MAKE) --no-print-directory deploy-kubo
+	@$(MAKE) --no-print-directory deploy-lgtm-stack
 
 deploy-kubo:
 	@$(call run_spinner,Deploying Kubo (IPFS)...,\
 			kubectl apply -f infra/k8s/kubo.yaml && \
 			kubectl wait --for=condition=ready pod -l app=kubo --timeout=120s)
 	@printf "$(CHECK) $(BOLD)Kubo (IPFS) deployed and ready.$(RESET)\n"
+	@echo
 
+deploy-lgtm-stack:
+	@$(call run_spinner,Deploying Loki...,\
+			helm upgrade --install loki grafana/loki \
+				--namespace default \
+				--values infra/helm/values-loki.yaml \
+				--wait --timeout 180s)
+	@printf "$(CHECK) $(BOLD)Loki deployed and ready.$(RESET)\n"
+	@echo
+	@$(call run_spinner,Deploying Tempo...,\
+			helm upgrade --install tempo grafana-community/tempo \
+				--namespace default \
+				--values infra/helm/values-tempo.yaml \
+				--wait --timeout 180s)
+	@printf "$(CHECK) $(BOLD)Tempo deployed and ready.$(RESET)\n"
+	@echo
+	@$(call run_spinner,Deploying Mimir...,\
+			helm upgrade --install mimir grafana/mimir-distributed \
+				--namespace default \
+				--values infra/helm/values-mimir.yaml \
+				--wait --timeout 300s)
+	@printf "$(CHECK) $(BOLD)Mimir deployed and ready.$(RESET)\n"
+	@echo
+	@$(call run_spinner,Deploying OpenTelemetry Collector...,\
+			helm upgrade --install otel-collector open-telemetry/opentelemetry-collector \
+				--namespace default \
+				--values infra/helm/values-otel-collector.yaml \
+				--wait --timeout 120s)
+	@printf "$(CHECK) $(BOLD)OpenTelemetry Collector deployed and ready.$(RESET)\n"
+	@echo
+	@$(call run_spinner,Applying Grafana datasources and dashboards...,\
+			kubectl apply -n default -f infra/helm/datasources/datasources.yaml && \
+			kubectl create configmap grafana-dashboard-metrics -n default \
+				--from-file=infra/helm/dashboards/dashboard-metrics.json \
+				--dry-run=client -o yaml | kubectl label -f - grafana_dashboard=1 --local -o yaml | kubectl apply -n default -f - && \
+			kubectl create configmap grafana-dashboard-traces -n default \
+				--from-file=infra/helm/dashboards/dashboard-traces.json \
+				--dry-run=client -o yaml | kubectl label -f - grafana_dashboard=1 --local -o yaml | kubectl apply -n default -f -)
+	@printf "$(CHECK) $(BOLD)Grafana datasources and dashboards applied.$(RESET)\n"
+	@echo
+	@$(call run_spinner,Deploying Grafana...,\
+			helm upgrade --install grafana grafana/grafana \
+				--namespace default \
+				--values infra/helm/values-grafana.yaml \
+				--wait --timeout 180s)
+	@printf "$(CHECK) $(BOLD)Grafana deployed and ready.$(RESET)\n"
 
 down:
 	@$(call run_spinner,Deleting k3d cluster '$(K3D_CLUSTER_NAME)'...,\
