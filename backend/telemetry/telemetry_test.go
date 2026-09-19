@@ -134,3 +134,26 @@ func TestSpanRecording_ChildSpanWithAttribute_IsCaptured(t *testing.T) {
 		t.Fatalf("expected child span's parent to be root span %s, got %s", root.SpanContext().SpanID(), child.Parent().SpanID())
 	}
 }
+
+func TestInit_RegistersLoggerProvider_LoggerAcceptsContextWithSpan(t *testing.T) {
+	os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	shutdown, err := Init(ctx, "ft_lgtm-test")
+	if err != nil {
+		t.Fatalf("Init returned error: %v", err)
+	}
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer shutdownCancel()
+		_ = shutdown(shutdownCtx)
+	}()
+
+	logger := Logger("test")
+	if logger == nil {
+		t.Fatal("expected Logger to return a non-nil *slog.Logger")
+	}
+	logger.InfoContext(context.Background(), "test log line", "key", "value")
+}

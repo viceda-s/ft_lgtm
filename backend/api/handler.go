@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -20,6 +19,7 @@ import (
 
 	"ft_lgtm/backend/compiler"
 	"ft_lgtm/backend/executor"
+	"ft_lgtm/backend/telemetry"
 )
 
 const executionTimeout = 5 * time.Second
@@ -105,7 +105,7 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		counter, err := executionsCounter()
 		if err != nil {
-			log.Printf("telemetry: constructing executions counter: %v", err)
+			telemetry.Logger("ft_lgtm/backend/api").ErrorContext(ctx, "constructing executions counter", "error", err)
 			return
 		}
 		counter.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("outcome", outcome))))
@@ -151,7 +151,7 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	cid, uploadErr := h.uploadWithSpan(ctx, req.Code, result.Stdout, result.Stderr)
 	if uploadErr != nil {
-		log.Printf("ipfs upload failed: %v", uploadErr)
+		telemetry.Logger("ft_lgtm/backend/api").ErrorContext(ctx, "ipfs upload failed", "error", uploadErr)
 	} else {
 		resp.IPFSLink = h.gatewayURL + "/ipfs/" + cid
 		span.SetAttributes(attribute.String("code.cid", cid))

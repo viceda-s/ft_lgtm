@@ -3,16 +3,20 @@ package telemetry
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
+	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	logglobal "go.opentelemetry.io/otel/log/global"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
-
 
 // Init registers a real OTLP/gRPC-exporting TraceProvider and MeterProvider as the global providers and returns a shutdown func.
 // Callers elsewhere use otel.Tracer(name)/otel.Meter(name) directly, not this package.
@@ -48,8 +52,20 @@ func Init(ctx context.Context, serviceName string) (func(context.Context) error,
 		metric.WithResource(res),
 	)
 
+	logExporter, err := otlploggrpc.New(ctx, otlploggrpc.WithInsecure())
+	if err != nil {
+		_ = traceProvider.Shutdown(ctx)
+		_ = meterProvider.Shutdown(ctx)
+		return nil, fmt.Errorf("constructing OTLP log exporter: %w", err)
+	}
+	loggerProvider := sdklog.NewLoggerProvider(
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
+		sdklog.WithResource(res),
+	)
+
 	otel.SetTracerProvider(traceProvider)
 	otel.SetMeterProvider(meterProvider)
+	logglobal.SetLoggerProvider(loggerProvider)
 
 	shutdown := func(ctx context.Context) error {
 		var errs []error
@@ -59,10 +75,18 @@ func Init(ctx context.Context, serviceName string) (func(context.Context) error,
 		if err := meterProvider.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("shutting down metric provider: %w", err))
 		}
+		if err := loggerProvider.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("shutting down logger provider: %w", err))
+		}
 		if len(errs) > 0 {
 			return fmt.Errorf("telemetry shutdown errors: %v", errs)
 		}
 		return nil
 	}
 	return shutdown, nil
+}
+
+// Logger returns a *slog.Logger backed by the globally registered OTel LoggerProvider. Log records emitted via its *Context methods automatically carry the active span's trace_id/span_id when ctx holds one. Before Init runs, OTel's own no-op global LoggerProvider is used, so calling Logger before Init is always safe (same behavior as otel.Tracer(...)/otel.Meter(...)).
+func Logger(name string) *slog.Logger {
+	return otelslog.NewLogger(name, otelslog.WithLoggerProvider(logglobal.GetLoggerProvider()))
 }

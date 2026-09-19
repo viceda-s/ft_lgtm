@@ -13,6 +13,8 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
+	logglobal "go.opentelemetry.io/otel/log/global"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -522,5 +524,70 @@ func TestHandler_InvalidCode_NoIPFSUploadSpan(t *testing.T) {
 		if s.Name() == "ipfs_upload" {
 			t.Fatal("expected no \"ipfs_upload\" span for a compile error")
 		}
+	}
+}
+
+type testLogExporter struct {
+	records []sdklog.Record
+}
+
+func (e *testLogExporter) Export(ctx context.Context, records []sdklog.Record) error {
+	for _, r := range records {
+		e.records = append(e.records, r.Clone())
+	}
+	return nil
+}
+
+func (e *testLogExporter) Shutdown(ctx context.Context) error   { return nil }
+func (e *testLogExporter) ForceFlush(ctx context.Context) error { return nil }
+
+func setTestLogger(t *testing.T, exporter *testLogExporter) func() {
+	t.Helper()
+	processor := sdklog.NewSimpleProcessor(exporter)
+	lp := sdklog.NewLoggerProvider(sdklog.WithProcessor(processor))
+	previous := logglobal.GetLoggerProvider()
+	logglobal.SetLoggerProvider(lp)
+	return func() { logglobal.SetLoggerProvider(previous) }
+}
+
+func TestHandler_UploadFails_LogsErrorWithTraceID(t *testing.T) {
+	recorder := withTestTracerProvider(t)
+	logExporter := &testLogExporter{}
+	restoreLogger := setTestLogger(t, logExporter)
+	defer restoreLogger()
+
+	exec := executor.NewExecutor()
+	uploader := &fakeUploader{err: errors.New("connection refused")}
+	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
+
+	body := `{"code": "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	spans := recorder.Ended()
+	var upload sdktrace.ReadOnlySpan
+	for _, s := range spans {
+		if s.Name() == "ipfs_upload" {
+			upload = s
+		}
+	}
+	if upload == nil {
+		t.Fatal("expected an \"ipfs_upload\" span")
+	}
+
+	if len(logExporter.records) == 0 {
+		t.Fatal("expected at least one log record for the upload failure")
+	}
+	found := false
+	for _, rec := range logExporter.records {
+		if rec.TraceID() == upload.SpanContext().TraceID() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a log record carrying trace_id %s, got none among %d records", upload.SpanContext().TraceID(), len(logExporter.records))
 	}
 }
