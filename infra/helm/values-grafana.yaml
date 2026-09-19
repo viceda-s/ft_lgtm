@@ -1,0 +1,23 @@
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    folder: /var/grafana/dashboards
+  datasources:
+    enabled: true
+    label: grafana_datasource
+
+ingress:
+  enabled: true
+  ingressClassName: nginx
+  hosts:
+    - grafana.lgtm.local
+  path: /
+
+persistence:
+  enabled: true
+  size: 1Gi
+
+admin:
+  existingSecret: ""
+adminPassword: admin
