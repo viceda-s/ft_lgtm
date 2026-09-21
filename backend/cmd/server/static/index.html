@@ -1,5 +1,39 @@
 <!DOCTYPE html>
-<html>
-<head><title>LGTM</title></head>
-<body><p>Playground placeholder - to be replaced in Task 3.</p></body>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>LGTM Playground</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <span class="wordmark">🔍 LGTM</span>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Your code</h2>
+        <button id="run-button" class="run-button">
+          <span id="run-spinner" class="spinner" hidden></span>
+          <span id="run-label">Run ▶</span>
+        </button>
+      </div>
+      <div id="editor" class="editor"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Output</h2>
+        <a id="ipfs-link" class="ipfs-link" href="#" target="_blank" rel="noopener" hidden>IPFS ↗</a>
+      </div>
+      <pre id="output" class="output"></pre>
+    </section>
+  </main>
+
+  <footer class="footer">LGTM by cgodard</footer>
+
+  <script src="/vendor/monaco/min/vs/loader.js"></script>
+  <script src="/app.js"></script>
+</body>
 </html>
