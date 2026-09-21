@@ -15,7 +15,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "mimir" },
-          "expr": "sum(increase(code_executions_total{outcome=\"success\"}[$__rate_interval]))",
+          "expr": "sum(increase(code_executions_total{outcome=\"success\"}[5m]))",
           "legendFormat": "Code passes"
         }
       ]
@@ -29,7 +29,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "mimir" },
-          "expr": "sum(increase(code_executions_total{outcome!=\"success\"}[$__rate_interval]))",
+          "expr": "sum(increase(code_executions_total{outcome!=\"success\"}[5m]))",
           "legendFormat": "Code failures"
         }
       ]
@@ -43,7 +43,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "mimir" },
-          "expr": "sum(increase(code_executions_total[$__rate_interval]))",
+          "expr": "sum(increase(code_executions_total[5m]))",
           "legendFormat": "Code runs"
         }
       ]
