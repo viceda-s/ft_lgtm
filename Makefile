@@ -35,7 +35,7 @@ define run_spinner
 	exit $$status
 endef
 
-.PHONY: install uninstall up down status smoke-test deploy-kubo deploy-lgtm-stack
+.PHONY: install uninstall up down status smoke-test deploy-kubo deploy-lgtm-stack deploy-backend
 
 install:
 	@printf "$(FIND) $(BOLD)Checking/installing host dependencies$(RESET)\n"
@@ -163,6 +163,7 @@ up: install
 
 	@$(MAKE) --no-print-directory deploy-kubo
 	@$(MAKE) --no-print-directory deploy-lgtm-stack
+	@$(MAKE) --no-print-directory deploy-backend
 
 deploy-kubo:
 	@$(call run_spinner,Deploying Kubo (IPFS)...,\
@@ -216,6 +217,18 @@ deploy-lgtm-stack:
 				--values infra/helm/values-grafana.yaml \
 				--wait --timeout 180s)
 	@printf "$(CHECK) $(BOLD)Grafana deployed and ready.$(RESET)\n"
+	@echo
+
+deploy-backend:
+	@$(call run_spinner,Building backend image...,\
+			docker build -t ft-lgtm-backend:dev backend/ && \
+			k3d image import ft-lgtm-backend:dev -c $(K3D_CLUSTER_NAME))
+	@printf "$(CHECK) $(BOLD)Backend image built and imported.$(RESET)\n"
+	@echo
+	@$(call run_spinner,Deploying backend...,\
+			kubectl apply -f infra/k8s/backend.yaml && \
+			kubectl wait --for=condition=ready pod -l app=backend --timeout=60s)
+	@printf "$(CHECK) $(BOLD)Backend deployed and ready.$(RESET)\n"
 
 down:
 	@$(call run_spinner,Deleting k3d cluster '$(K3D_CLUSTER_NAME)'...,\
