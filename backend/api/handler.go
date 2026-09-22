@@ -111,6 +111,8 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		counter.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("outcome", outcome))))
 	}()
 
+	logger := telemetry.Logger("ft_lgtm/backend/api")
+
 	wasmBytes, err := h.compileWithSpan(ctx, req.Code)
 	if err != nil {
 		outcome = "compile_error"
@@ -122,6 +124,7 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			resp.CompileError = err.Error()
 		}
+		logger.ErrorContext(ctx, "compilation failed", "code.hash", codeHash, "compile_error", resp.CompileError)
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -130,6 +133,7 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		outcome = "runtime_error"
 		span.SetStatus(codes.Error, "execution error")
+		logger.ErrorContext(ctx, "execution error", "code.hash", codeHash, "error", err)
 		http.Error(w, "internal execution error", http.StatusInternalServerError)
 		return
 	}
@@ -144,14 +148,18 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if result.TimedOut {
 		outcome = "timeout"
 		span.SetStatus(codes.Error, "execution timed out")
+		logger.ErrorContext(ctx, "execution timed out", "code.hash", codeHash)
 	} else if result.ExitError != nil {
 		outcome = "runtime_error"
 		span.SetStatus(codes.Error, result.ExitError.Error())
+		logger.ErrorContext(ctx, "execution exited with error", "code.hash", codeHash, "error", result.ExitError)
+	} else {
+		logger.InfoContext(ctx, "execution succeeded", "code.hash", codeHash)
 	}
 
 	cid, uploadErr := h.uploadWithSpan(ctx, req.Code, result.Stdout, result.Stderr)
 	if uploadErr != nil {
-		telemetry.Logger("ft_lgtm/backend/api").ErrorContext(ctx, "ipfs upload failed", "error", uploadErr)
+		logger.ErrorContext(ctx, "ipfs upload failed", "code.hash", codeHash, "error", uploadErr)
 	} else {
 		resp.IPFSLink = h.gatewayURL + "/ipfs/" + cid
 		span.SetAttributes(attribute.String("code.cid", cid))

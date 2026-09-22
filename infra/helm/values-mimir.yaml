@@ -3,3 +3,4 @@ mimir:
     limits:
       ingestion_rate: 100000
       ingestion_burst_size: 200000
+      max_global_exemplars_per_user: 100000

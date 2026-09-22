@@ -227,7 +227,8 @@ deploy-backend:
 	@echo
 	@$(call run_spinner,Deploying backend...,\
 			kubectl apply -f infra/k8s/backend.yaml && \
-			kubectl wait --for=condition=ready pod -l app=backend --timeout=60s)
+			kubectl rollout restart deployment/backend && \
+			kubectl rollout status deployment/backend --timeout=60s)
 	@printf "$(CHECK) $(BOLD)Backend deployed and ready.$(RESET)\n"
 
 down:
