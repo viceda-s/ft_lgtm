@@ -1,6 +1,6 @@
 {
-  "title": "Code runs",
-  "uid": "code-runs-metrics",
+  "title": "Dashboard 1: Metrics - The Big Picture",
+  "uid": "dashboard-metrics",
   "timezone": "browser",
   "schemaVersion": 39,
   "refresh": "10s",
@@ -9,9 +9,16 @@
     {
       "id": 1,
       "title": "Code passes",
+      "description": "Number of successful executions (the green line going up!)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "mimir" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "green" },
+          "custom": { "fillOpacity": 25 }
+        }
+      },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "mimir" },
@@ -23,9 +30,16 @@
     {
       "id": 2,
       "title": "Code failures",
+      "description": "Number of failed executions (debugging opportunities)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "mimir" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "red" },
+          "custom": { "fillOpacity": 25 }
+        }
+      },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "mimir" },
@@ -37,9 +51,16 @@
     {
       "id": 3,
       "title": "Code runs",
+      "description": "Total executions (your platform's heartbeat)",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 16, "x": 0, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "mimir" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "purple" },
+          "custom": { "fillOpacity": 25 }
+        }
+      },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "mimir" },
