@@ -97,15 +97,6 @@ install:
 	else \
 		printf "$(CHECK) Go already installed: %s\n" "$$(go version)"; \
 	fi
-	@if ! command -v tinygo >/dev/null 2>&1; then \
-		$(call run_spinner,Installing TinyGo...,\
-			curl -fsSL -o /tmp/tinygo.deb https://github.com/tinygo-org/tinygo/releases/download/v0.42.0/tinygo_0.42.0_amd64.deb && \
-			sudo dpkg -i /tmp/tinygo.deb && \
-			rm -f /tmp/tinygo.deb); \
-		printf "$(CHECK) TinyGo installed: %s\n" "$$(tinygo version)"; \
-	else \
-		printf "$(CHECK) TinyGo already installed: %s\n" "$$(tinygo version)"; \
-	fi
 
 	@printf "$(CHECK) $(BOLD)All host dependencies present.$(RESET)\n"
 	@echo
@@ -129,9 +120,6 @@ uninstall:
 	@$(call run_spinner,Removing Go...,\
 		sudo rm -rf /usr/local/go /usr/local/bin/go /usr/local/bin/gofmt)
 	@printf "$(CHECK) Go removed.\n"
-	@$(call run_spinner,Removing TinyGo...,\
-		sudo rm -f $$(command -v tinygo))
-	@printf "$(CHECK) TinyGo removed.\n"
 	@printf "$(CHECK) $(BOLD)Host dependencies removed.$(RESET)\n"
 	@echo
 

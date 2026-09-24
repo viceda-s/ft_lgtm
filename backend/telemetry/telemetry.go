@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel"
@@ -17,6 +18,9 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
+
+// metricExportInterval controls how often the PeriodicReader flushes metrics to the collector. The SDK's default is 60s, which made the Grafana dashboards (refreshing every 10s) look stalled for up to a minute after a code execution. A short interval keeps the dashboards close to real-time.
+const metricExportInterval = 5 * time.Second
 
 // Init registers a real OTLP/gRPC-exporting TraceProvider and MeterProvider as the global providers and returns a shutdown func.
 // Callers elsewhere use otel.Tracer(name)/otel.Meter(name) directly, not this package.
@@ -48,7 +52,7 @@ func Init(ctx context.Context, serviceName string) (func(context.Context) error,
 		return nil, fmt.Errorf("constructing OTLP metric exporter: %w", err)
 	}
 	meterProvider := metric.NewMeterProvider(
-		metric.WithReader(metric.NewPeriodicReader(metricExporter)),
+		metric.WithReader(metric.NewPeriodicReader(metricExporter, metric.WithInterval(metricExportInterval))),
 		metric.WithResource(res),
 	)
 
