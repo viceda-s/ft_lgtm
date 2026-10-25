@@ -14,10 +14,18 @@
     <section class="panel">
       <div class="panel-header">
         <h2>Your code</h2>
-        <button id="run-button" class="run-button">
-          <span id="run-spinner" class="spinner" hidden></span>
-          <span id="run-label">Run ▶</span>
-        </button>
+        <div class="panel-actions">
+          <select id="language" class="language-select" aria-label="Language">
+            <option value="go">Go</option>
+            <option value="c">C</option>
+            <option value="rust">Rust</option>
+            <option value="assemblyscript">AssemblyScript</option>
+          </select>
+          <button id="run-button" class="run-button">
+            <span id="run-spinner" class="spinner" hidden></span>
+            <span id="run-label">Run ▶</span>
+          </button>
+        </div>
       </div>
       <div id="editor" class="editor"></div>
     </section>

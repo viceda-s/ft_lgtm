@@ -136,6 +136,16 @@ main {
   gap: 16px;
 }
 
+.language-select {
+  padding: 5px 8px;
+  background: #3c3c3c;
+  color: #d4d4d4;
+  border: 1px solid #555;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
 .share-button {
   padding: 0;
   background: none;
