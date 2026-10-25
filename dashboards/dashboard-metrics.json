@@ -125,6 +125,47 @@
           "legendFormat": "Code runs"
         }
       ]
+    },
+    {
+      "id": 4,
+      "title": "Runs by language",
+      "description": "Executions per language over the last 5 minutes (most popular languages)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 16,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 40,
+            "gradientMode": "opacity",
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "decimals": 0
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "sum by (language) (increase(code_executions_total{language!=\"\"}[5m]))",
+          "legendFormat": "{{language}}"
+        }
+      ]
     }
   ]
 }
