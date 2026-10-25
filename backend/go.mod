@@ -4,6 +4,8 @@ go 1.25.0
 
 require (
 	github.com/bytecodealliance/wasmtime-go/v48 v48.0.0
+	github.com/grafana/otel-profiling-go v0.7.0
+	github.com/grafana/pyroscope-go v1.4.3
 	github.com/ipfs/boxo v0.30.0
 	github.com/ipfs/kubo v0.35.0
 	go.opentelemetry.io/contrib/bridges/otelslog v0.20.1
@@ -55,6 +57,7 @@ require (
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/google/pprof v0.0.0-20250208200701-d0013a598941 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/grafana/pyroscope-go/godeltaprof v0.1.11 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/hashicorp/golang-lru v1.0.2 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
@@ -80,7 +83,7 @@ require (
 	github.com/ipshipyard/p2p-forge v0.5.1 // indirect
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
 	github.com/jbenet/go-temp-err-catcher v0.1.0 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/koron/go-ssdp v0.0.5 // indirect
 	github.com/kr/pretty v0.3.1 // indirect

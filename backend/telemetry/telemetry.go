@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
+	otelpyroscope "github.com/grafana/otel-profiling-go"
+	"github.com/grafana/pyroscope-go"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
@@ -61,13 +64,42 @@ func Init(ctx context.Context, serviceName string) (func(context.Context) error,
 		sdklog.WithResource(res),
 	)
 
-	otel.SetTracerProvider(traceProvider)
+	var profiler *pyroscope.Profiler
+	if addr := os.Getenv("PYROSCOPE_SERVER_ADDRESS"); addr != "" {
+		profiler, err = pyroscope.Start(pyroscope.Config{
+			ApplicationName: serviceName,
+			ServerAddress:   addr,
+			ProfileTypes: []pyroscope.ProfileType{
+				pyroscope.ProfileCPU,
+				pyroscope.ProfileAllocObjects,
+				pyroscope.ProfileAllocSpace,
+				pyroscope.ProfileInuseObjects,
+				pyroscope.ProfileInuseSpace,
+				pyroscope.ProfileGoroutines,
+			},
+		})
+		if err != nil {
+			_ = traceProvider.Shutdown(ctx)
+			_ = meterProvider.Shutdown(ctx)
+			_ = loggerProvider.Shutdown(ctx)
+			return nil, fmt.Errorf("starting pyroscope profiler: %w", err)
+		}
+	}
+
+	otel.SetTracerProvider(otelpyroscope.NewTracerProvider(traceProvider,
+		otelpyroscope.WithSpanIDLabelScope(otelpyroscope.ScopeAllSpans),
+		otelpyroscope.WithSpanNameLabelScope(otelpyroscope.ScopeAllSpans)))
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	otel.SetMeterProvider(meterProvider)
 	logglobal.SetLoggerProvider(loggerProvider)
 
 	shutdown := func(ctx context.Context) error {
 		var errs []error
+		if profiler != nil {
+			if err := profiler.Stop(); err != nil {
+				errs = append(errs, fmt.Errorf("stopping profiler: %w", err))
+			}
+		}
 		if err := traceProvider.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("shutting down tracer provider: %w", err))
 		}
