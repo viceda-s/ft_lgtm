@@ -42,7 +42,7 @@ func Compile(clx context.Context, source string) ([]byte, error) {
 
 	wasmPath := filepath.Join(tmpDir, "main.wasm")
 
-	cmd := exec.CommandContext(clx, "tinygo", "build", "-o", "main.wasm", "main.go")
+	cmd := exec.CommandContext(clx, "/usr/local/bin/tinygo", "build", "-o", "main.wasm", "main.go")
 	cmd.Dir = tmpDir
 	cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
 

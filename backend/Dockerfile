@@ -1,7 +1,7 @@
 FROM golang:1.25-bookworm AS build
 ARG TINYGO_VERSION=0.42.0
 RUN arch="$(dpkg --print-architecture)" && \
-    curl -fsSL -o /tmp/tinygo.deb "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_${arch}.deb" && \
+    curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/tinygo.deb "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_${arch}.deb" && \
     dpkg -i /tmp/tinygo.deb && rm -f /tmp/tinygo.deb
 WORKDIR /src
 COPY go.mod go.sum ./
