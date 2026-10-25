@@ -10,6 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type CompileError struct {
@@ -49,7 +53,9 @@ func Compile(clx context.Context, source string) ([]byte, error) {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	err = cmd.Run()
+	recordUsage(clx, cmd.ProcessState)
+	if err != nil {
 		if errors.Is(clx.Err(), context.DeadlineExceeded) {
 			return nil, &CompileError{Stderr: "compilation timed out"}
 		}
@@ -65,4 +71,17 @@ func Compile(clx context.Context, source string) ([]byte, error) {
 	}
 
 	return wasmBytes, nil
+}
+
+func recordUsage(ctx context.Context, state *os.ProcessState) {
+	if state == nil {
+		return
+	}
+	attrs := []attribute.KeyValue{
+		attribute.Int64("compile.cpu_time_ms", (state.UserTime() + state.SystemTime()).Milliseconds()),
+	}
+	if usage, ok := state.SysUsage().(*syscall.Rusage); ok {
+		attrs = append(attrs, attribute.Int64("compile.max_rss_bytes", usage.Maxrss*1024))
+	}
+	trace.SpanFromContext(ctx).SetAttributes(attrs...)
 }

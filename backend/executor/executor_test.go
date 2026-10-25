@@ -3,6 +3,7 @@ package executor
 import (
     "context"
     "sync"
+    "runtime"
     "testing"
     "time"
 
@@ -194,5 +195,37 @@ func main() {
     }
     if result.ExitError == nil {
         t.Fatal("expected ExitError to be set when the module exceeds its memory limit")
+    }
+}
+
+func TestExecutor_Run_ReportsCPUMemoryAndFuel(t *testing.T) {
+    exec := NewExecutor()
+    defer exec.Close()
+    idle, err := exec.Run(compileFixture(t, "package main\n\nfunc main() {}\n"), 5*time.Second, 10*1024)
+    if err != nil {
+        t.Fatalf("Run returned infrastructure error: %v", err)
+    }
+    busy, err := exec.Run(compileFixture(t, `package main
+
+func main() {
+    total := uint32(1)
+    for i := uint32(0); i < 20000000; i++ {
+        total = total*1664525 + i
+    }
+    println(total)
+}
+`), 5*time.Second, 10*1024)
+    if err != nil {
+        t.Fatalf("Run returned infrastructure error: %v", err)
+    }
+
+    if busy.FuelConsumed < 10*idle.FuelConsumed || busy.FuelConsumed < 20000000 {
+        t.Fatalf("expected the busy loop to consume far more fuel than an empty program, got %d vs %d", busy.FuelConsumed, idle.FuelConsumed)
+    }
+    if busy.MemoryBytes == 0 {
+        t.Fatal("expected the linear memory size to be reported")
+    }
+    if runtime.GOOS == "linux" && busy.CPUTime <= idle.CPUTime {
+        t.Fatalf("expected the busy loop to use more thread CPU time, got %v vs %v", busy.CPUTime, idle.CPUTime)
     }
 }

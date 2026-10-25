@@ -6,6 +6,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestCompile_ValidProgram_ReturnsWasmBytes(t *testing.T) {
@@ -92,5 +96,26 @@ func TestCompile_Cgo_RejectedBeforeIncludingHostFiles(t *testing.T) {
 	}
 	if !strings.Contains(compileErr.Stderr, "cgo") {
 		t.Fatalf("expected a cgo rejection message, got: %s", compileErr.Stderr)
+	}
+}
+
+func TestCompile_RecordsCompilerCPUAndMemoryOnSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	ctx, span := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder)).Tracer("test").Start(context.Background(), "compile")
+
+	if _, err := Compile(ctx, "package main\n\nfunc main() {}\n"); err != nil {
+		t.Fatalf("Compile returned error for valid program: %v", err)
+	}
+	span.End()
+
+	got := map[attribute.Key]attribute.Value{}
+	for _, kv := range recorder.Ended()[0].Attributes() {
+		got[kv.Key] = kv.Value
+	}
+	if _, ok := got["compile.cpu_time_ms"]; !ok {
+		t.Fatalf("expected compile.cpu_time_ms on the span, got %v", got)
+	}
+	if rss, ok := got["compile.max_rss_bytes"]; !ok || rss.AsInt64() < 1<<20 {
+		t.Fatalf("expected compile.max_rss_bytes of at least 1 MiB, got %v", got)
 	}
 }

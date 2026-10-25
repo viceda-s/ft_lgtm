@@ -282,6 +282,9 @@ func (h *executeHandler) runWithSpan(ctx context.Context, wasmBytes []byte) (exe
 	span.SetAttributes(
 		attribute.Int("execution.stdout_bytes", len(result.Stdout)),
 		attribute.Int("execution.stderr_bytes", len(result.Stderr)),
+		attribute.Float64("execution.cpu_time_ms", float64(result.CPUTime.Microseconds())/1000),
+		attribute.Int64("wasm.memory_bytes", int64(result.MemoryBytes)),
+		attribute.Int64("wasm.fuel_consumed", int64(result.FuelConsumed)),
 	)
 	switch {
 	case result.TimedOut:

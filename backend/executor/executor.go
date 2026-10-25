@@ -4,6 +4,7 @@ import (
     "bytes"
     "encoding/binary"
     "fmt"
+    "runtime"
     "time"
 
     "github.com/bytecodealliance/wasmtime-go/v48"
@@ -11,6 +12,8 @@ import (
 
 
 const epochTick = 10 * time.Millisecond
+
+const fuelBudget = 1 << 62
 
 const (
     wasiErrnoSuccess = 0
@@ -25,6 +28,9 @@ type Result struct {
     TimedOut            bool
     OutputLimitExceeded bool
     ExitError           error
+    CPUTime             time.Duration
+    MemoryBytes         uint64
+    FuelConsumed        uint64
 }
 
 
@@ -37,6 +43,7 @@ type Executor struct {
 func NewExecutor() *Executor {
     config := wasmtime.NewConfig()
     config.SetEpochInterruption(true)
+    config.SetConsumeFuel(true)
     e := &Executor{
         engine: wasmtime.NewEngineWithConfig(config),
         stop:   make(chan struct{}),
@@ -70,6 +77,9 @@ func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes i
     defer store.Close()
     store.SetEpochDeadline(uint64(timeout/epochTick) + 1)
     store.Limiter(int64(10*1024*1024), -1, -1, -1, -1)
+    if err := store.SetFuel(fuelBudget); err != nil {
+        return Result{}, fmt.Errorf("setting fuel: %w", err)
+    }
 
     wasiConfig := wasmtime.NewWasiConfig()
     wasiConfig.SetArgv([]string{"prog"})
@@ -102,12 +112,23 @@ func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes i
         return Result{}, fmt.Errorf("wasm module has no _start function (not a WASI command module)")
     }
 
+    runtime.LockOSThread()
+    cpuBefore := threadCPUTime()
     _, callErr := start.Call(store)
+    cpuTime := threadCPUTime() - cpuBefore
+    runtime.UnlockOSThread()
 
     result := Result{
         Stdout:              output.stdout.String(),
         Stderr:              output.stderr.String(),
         OutputLimitExceeded: output.exceeded,
+        CPUTime:             cpuTime,
+    }
+    if remaining, err := store.GetFuel(); err == nil {
+        result.FuelConsumed = fuelBudget - remaining
+    }
+    if export := instance.GetExport(store, "memory"); export != nil && export.Memory() != nil {
+        result.MemoryBytes = uint64(export.Memory().DataSize(store))
     }
     result.TimedOut, result.ExitError = classifyCallError(callErr, output.exceeded)
     return result, nil
