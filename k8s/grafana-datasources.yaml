@@ -36,9 +36,21 @@ data:
             tags:
               - key: service.name
                 value: service_name
+          tracesToProfiles:
+            datasourceUid: pyroscope
+            profileTypeId: process_cpu:cpu:nanoseconds:cpu:nanoseconds
+            tags:
+              - key: service.name
+                value: service_name
 
       - name: Loki
         type: loki
         access: proxy
         url: http://loki:3100
         uid: loki
+
+      - name: Pyroscope
+        type: grafana-pyroscope-datasource
+        access: proxy
+        url: http://pyroscope:4040
+        uid: pyroscope

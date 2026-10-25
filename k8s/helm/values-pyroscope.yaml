@@ -1,0 +1,15 @@
+pyroscope:
+  extraArgs:
+    log.level: info
+  persistence:
+    enabled: true
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 1Gi
+
+alloy:
+  enabled: false

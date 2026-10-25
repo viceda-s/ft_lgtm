@@ -33,6 +33,8 @@ spec:
               value: http://ipfs.lgtm.local
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://otel-collector-opentelemetry-collector:4317
+            - name: PYROSCOPE_SERVER_ADDRESS
+              value: http://pyroscope:4040
             - name: TINYGOROOT
               value: /usr/local/lib/tinygo
           readinessProbe:

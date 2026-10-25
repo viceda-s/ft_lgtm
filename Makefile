@@ -184,6 +184,13 @@ deploy-lgtm-stack:
 				--wait --timeout 120s)
 	@printf "$(CHECK) $(BOLD)OpenTelemetry node agents deployed and ready.$(RESET)\n"
 	@echo
+	@$(call run_spinner,Deploying Pyroscope...,\
+			helm upgrade --install pyroscope grafana/pyroscope \
+				--namespace default \
+				--values k8s/helm/values-pyroscope.yaml \
+				--wait --timeout 180s)
+	@printf "$(CHECK) $(BOLD)Pyroscope deployed and ready.$(RESET)\n"
+	@echo
 	@$(call run_spinner,Applying Grafana datasources and dashboards...,\
 			kubectl apply -n default -f k8s/grafana-datasources.yaml && \
 			kubectl create configmap grafana-dashboard-metrics -n default \
@@ -194,6 +201,9 @@ deploy-lgtm-stack:
 				--dry-run=client -o yaml | kubectl label -f - grafana_dashboard=1 --local -o yaml | kubectl apply -n default -f - && \
 			kubectl create configmap grafana-dashboard-cluster -n default \
 				--from-file=dashboards/dashboard-cluster.json \
+				--dry-run=client -o yaml | kubectl label -f - grafana_dashboard=1 --local -o yaml | kubectl apply -n default -f - && \
+			kubectl create configmap grafana-dashboard-profiles -n default \
+				--from-file=dashboards/dashboard-profiles.json \
 				--dry-run=client -o yaml | kubectl label -f - grafana_dashboard=1 --local -o yaml | kubectl apply -n default -f -)
 	@printf "$(CHECK) $(BOLD)Grafana datasources and dashboards applied.$(RESET)\n"
 	@echo
