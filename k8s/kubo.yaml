@@ -10,6 +10,15 @@ spec:
       storage: 10Gi
 
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubo-init
+data:
+  gateway.sh: |
+    ipfs config --json Gateway.NoDNSLink true
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -42,6 +51,9 @@ spec:
           volumeMounts:
             - name: kubo-data
               mountPath: /data/ipfs
+            - name: kubo-init
+              mountPath: /container-init.d/gateway.sh
+              subPath: gateway.sh
           readinessProbe:
             exec:
               command:
@@ -56,6 +68,9 @@ spec:
         - name: kubo-data
           persistentVolumeClaim:
             claimName: kubo-data
+        - name: kubo-init
+          configMap:
+            name: kubo-init
 
 ---
 apiVersion: v1
