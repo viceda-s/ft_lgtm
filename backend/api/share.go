@@ -37,7 +37,7 @@ func NewShareHandler(reader SharedCodeReader, gatewayURL string) http.Handler {
 		panic("api: NewShareHandler called with nil reader")
 	}
 	h := &shareHandler{reader: reader, gatewayURL: strings.TrimRight(gatewayURL, "/")}
-	return otelhttp.NewHandler(h, "/api/share/{id}",
+	return otelhttp.NewHandler(h, "/api/share/{id}", publicEndpoint,
 		otelhttp.WithSpanNameFormatter(func(operation string, _ *http.Request) string { return operation }))
 }
 

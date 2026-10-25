@@ -30,6 +30,10 @@ const compileTimeout = 20 * time.Second
 
 const uploadTimeout = 5 * time.Second
 
+const provideTimeout = 2 * time.Minute
+
+const maxConcurrentProvides = 4
+
 const maxRequestBytes = 64 * 1024
 
 const maxConcurrentRuns = 4
@@ -37,6 +41,8 @@ const maxConcurrentRuns = 4
 const instrumentationName = "ft_lgtm/backend/api"
 
 func tracer() trace.Tracer { return otel.Tracer(instrumentationName) }
+
+var publicEndpoint = otelhttp.WithPublicEndpointFn(func(*http.Request) bool { return true })
 
 var executionOutcomes = []string{"success", "compile_error", "runtime_error", "timeout", "output_limit", "internal_error", "cancelled"}
 
@@ -66,6 +72,7 @@ func instruments() (metric.Int64Counter, error) {
 type Uploader interface {
 	Upload(ctx context.Context, source, stdout, stderr string) (string, error)
 	Share(ctx context.Context, cid string) (string, error)
+	Provide(ctx context.Context, cid string) error
 }
 
 type ExecuteRequest struct {
@@ -92,10 +99,11 @@ type Timings struct {
 }
 
 type executeHandler struct {
-	exec       *executor.Executor
-	uploader   Uploader
-	gatewayURL string
-	slots      chan struct{}
+	exec         *executor.Executor
+	uploader     Uploader
+	gatewayURL   string
+	slots        chan struct{}
+	provideSlots chan struct{}
 }
 
 func NewHandler(exec *executor.Executor, uploader Uploader, gatewayURL string) http.Handler {
@@ -103,13 +111,14 @@ func NewHandler(exec *executor.Executor, uploader Uploader, gatewayURL string) h
 		panic("api: NewHandler called with nil uploader")
 	}
 	h := &executeHandler{
-		exec:       exec,
-		uploader:   uploader,
-		gatewayURL: strings.TrimRight(gatewayURL, "/"),
-		slots:      make(chan struct{}, maxConcurrentRuns),
+		exec:         exec,
+		uploader:     uploader,
+		gatewayURL:   strings.TrimRight(gatewayURL, "/"),
+		slots:        make(chan struct{}, maxConcurrentRuns),
+		provideSlots: make(chan struct{}, maxConcurrentProvides),
 	}
 	instruments()
-	return otelhttp.NewHandler(h, "/api/execute",
+	return otelhttp.NewHandler(h, "/api/execute", publicEndpoint,
 		otelhttp.WithSpanNameFormatter(func(operation string, _ *http.Request) string { return operation }))
 }
 
@@ -222,6 +231,7 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			resp.ShareID = shareID
 		}
+		h.provideInBackground(ctx, cid)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -314,4 +324,35 @@ func (h *executeHandler) shareWithSpan(ctx context.Context, cid string) (string,
 	}
 	span.SetAttributes(attribute.String("share.id", id))
 	return id, nil
+}
+
+func (h *executeHandler) provideInBackground(ctx context.Context, cid string) {
+	select {
+	case h.provideSlots <- struct{}{}:
+	default:
+		trace.SpanFromContext(ctx).AddEvent("ipfs_provide skipped: too many announcements in flight")
+		return
+	}
+
+	requestSpan := trace.SpanFromContext(ctx)
+	ctx, span := tracer().Start(context.WithoutCancel(ctx), "ipfs_provide",
+		trace.WithNewRoot(),
+		trace.WithLinks(trace.Link{SpanContext: requestSpan.SpanContext()}),
+		trace.WithAttributes(attribute.String("code.cid", cid)))
+	requestSpan.SetAttributes(attribute.String("ipfs.provide.trace_id", span.SpanContext().TraceID().String()))
+	go func() {
+		defer func() { <-h.provideSlots }()
+		defer span.End()
+
+		provideCtx, cancel := context.WithTimeout(ctx, provideTimeout)
+		defer cancel()
+
+		logger := telemetry.Logger(instrumentationName)
+		if err := h.uploader.Provide(provideCtx, cid); err != nil {
+			span.SetStatus(codes.Error, "announcing the CID to the IPFS network failed")
+			logger.ErrorContext(ctx, "announcing the CID to the IPFS network failed", "code.cid", cid, "error", err)
+			return
+		}
+		logger.InfoContext(ctx, "CID announced to the IPFS network", "code.cid", cid)
+	}()
 }
