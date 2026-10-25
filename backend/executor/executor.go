@@ -6,6 +6,7 @@ import (
     "fmt"
     "runtime"
     "time"
+    "unicode/utf16"
 
     "github.com/bytecodealliance/wasmtime-go/v48"
 )
@@ -96,6 +97,15 @@ func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes i
     if err := linker.FuncWrap("wasi_snapshot_preview1", "fd_write", output.fdWrite); err != nil {
         return Result{}, fmt.Errorf("overriding WASI fd_write: %w", err)
     }
+    if err := linker.FuncWrap("env", "console.log", output.consoleLog); err != nil {
+        return Result{}, fmt.Errorf("defining env.console.log: %w", err)
+    }
+    if err := linker.FuncWrap("env", "abort", output.abort); err != nil {
+        return Result{}, fmt.Errorf("defining env.abort: %w", err)
+    }
+    if err := linker.FuncWrap("env", "seed", func() float64 { return float64(time.Now().UnixNano()) }); err != nil {
+        return Result{}, fmt.Errorf("defining env.seed: %w", err)
+    }
 
     module, err := wasmtime.NewModule(e.engine, wasmBytes)
     if err != nil {
@@ -104,7 +114,7 @@ func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes i
 
     instance, err := linker.Instantiate(store, module)
     if err != nil {
-        return Result{}, fmt.Errorf("instantiating wasm module: %w", err)
+        return Result{ExitError: fmt.Errorf("instantiating wasm module: %w", err)}, nil
     }
 
     start := instance.GetFunc(store, "_start")
@@ -190,14 +200,9 @@ func (o *outputCapture) fdWrite(caller *wasmtime.Caller, fd, iovs, iovsLen, nwri
         if !ok {
             return wasiErrnoFault, nil
         }
-        if len(data) > o.remaining {
-            dst.Write(data[:o.remaining])
-            o.remaining = 0
-            o.exceeded = true
-            return 0, wasmtime.NewTrap(fmt.Sprintf("output limit of %d bytes exceeded", o.limit))
+        if trap := o.write(dst, data); trap != nil {
+            return 0, trap
         }
-        dst.Write(data)
-        o.remaining -= len(data)
         written += uint32(len(data))
     }
 
@@ -207,6 +212,63 @@ func (o *outputCapture) fdWrite(caller *wasmtime.Caller, fd, iovs, iovsLen, nwri
     }
     binary.LittleEndian.PutUint32(out, written)
     return wasiErrnoSuccess, nil
+}
+
+
+func (o *outputCapture) write(dst *bytes.Buffer, data []byte) *wasmtime.Trap {
+    if len(data) > o.remaining {
+        dst.Write(data[:o.remaining])
+        o.remaining = 0
+        o.exceeded = true
+        return wasmtime.NewTrap(fmt.Sprintf("output limit of %d bytes exceeded", o.limit))
+    }
+    dst.Write(data)
+    o.remaining -= len(data)
+    return nil
+}
+
+
+func (o *outputCapture) consoleLog(caller *wasmtime.Caller, message int32) *wasmtime.Trap {
+    text, ok := readASString(caller, message)
+    if !ok {
+        return wasmtime.NewTrap("console.log: string is out of bounds")
+    }
+    return o.write(&o.stdout, []byte(text+"\n"))
+}
+
+
+func (o *outputCapture) abort(caller *wasmtime.Caller, message, file, line, column int32) *wasmtime.Trap {
+    text, _ := readASString(caller, message)
+    name, _ := readASString(caller, file)
+    if trap := o.write(&o.stderr, []byte(fmt.Sprintf("abort: %s at %s:%d:%d\n", text, name, line, column))); trap != nil {
+        return trap
+    }
+    return wasmtime.NewTrap("abort: " + text)
+}
+
+
+func readASString(caller *wasmtime.Caller, ptr int32) (string, bool) {
+    if ptr == 0 {
+        return "", true
+    }
+    memExport := caller.GetExport("memory")
+    if ptr < 4 || memExport == nil || memExport.Memory() == nil {
+        return "", false
+    }
+    mem := memExport.Memory().UnsafeData(caller)
+    header, ok := memSlice(mem, uint32(ptr)-4, 4)
+    if !ok {
+        return "", false
+    }
+    data, ok := memSlice(mem, uint32(ptr), binary.LittleEndian.Uint32(header))
+    if !ok || len(data)%2 != 0 {
+        return "", false
+    }
+    units := make([]uint16, len(data)/2)
+    for i := range units {
+        units[i] = binary.LittleEndian.Uint16(data[2*i:])
+    }
+    return string(utf16.Decode(units)), true
 }
 
 
