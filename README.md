@@ -53,3 +53,7 @@ This project runs entirely inside a local VM, as required by the subject. IPFS i
   > "If you are behind NAT without UPnP / IPv6, explain the limitations to your evaluators." [subject, V.1.4]
 
 The k3d load balancer publishes Kubo's swarm port (4001, TCP and UDP) on the VM; the RPC API (5001) is never exposed. Where router port-forwarding or a public/IPv6 address is available, the same CID is tested from another network. Note that forwarding the swarm port (4001) alone is a best-effort attempt, not a guarantee — Kubo may still announce internal cluster/pod addresses that a remote peer can't route to, depending on the network setup. Where reachability isn't achieved, this limitation is documented here and demonstrated locally via `ipfs.lgtm.local` instead.
+
+## Bonus features
+
+- **Social sharing:** every run that reaches IPFS gets a short link such as `http://lgtm.local/s/k4twd4jo`. Opening it loads the code into the editor. The id is derived from the CID, so the same code and output always give the same link, and it is stored as an MFS entry (`/shares/<id>`) on Kubo's persistent volume, so no extra database is needed. `GET /api/share/<id>` returns the code as JSON, and creating a link shows up as a `share_link` span in the execution trace.
