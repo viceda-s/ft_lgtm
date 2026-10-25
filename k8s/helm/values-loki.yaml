@@ -3,7 +3,7 @@ deploymentMode: SingleBinary
 singleBinary:
   replicas: 1
   persistence:
-    enable: true
+    enabled: true
     size: 5Gi
 
 loki:
@@ -42,10 +42,11 @@ gateway:
 test:
   enabled: false
 
+lokiCanary:
+  enabled: false
+
 monitoring:
   serviceMonitor:
     enabled: false
   selfMonitoring:
-    enabled: false
-  lokiCanary:
     enabled: false

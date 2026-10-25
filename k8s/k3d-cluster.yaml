@@ -11,6 +11,12 @@ ports:
   - port: 443:443
     nodeFilters:
       - loadbalancer
+  - port: 4001:4001/tcp
+    nodeFilters:
+      - loadbalancer
+  - port: 4001:4001/udp
+    nodeFilters:
+      - loadbalancer
 options:
   k3s:
     extraArgs:

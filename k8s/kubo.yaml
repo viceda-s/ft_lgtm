@@ -32,6 +32,9 @@ spec:
           ports:
             - name: swarm
               containerPort: 4001
+            - name: swarm-udp
+              containerPort: 4001
+              protocol: UDP
             - name: api
               containerPort: 5001
             - name: gateway
@@ -44,7 +47,7 @@ spec:
               command:
                 - sh
                 - -c
-                - wget -qO- --post-data='' http://127.0.0.1:5001/api/v0/version >dev/null
+                - wget -qO- --post-data='' http://127.0.0.1:5001/api/v0/version >/dev/null
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
@@ -69,9 +72,25 @@ spec:
     - name: gateway
       port: 8080
       targetPort: gateway
-    - name: swarn
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubo-swarm
+spec:
+  type: LoadBalancer
+  selector:
+    app: kubo
+  ports:
+    - name: swarm-tcp
       port: 4001
-      targetPort: swarn
+      targetPort: swarm
+      protocol: TCP
+    - name: swarm-udp
+      port: 4001
+      targetPort: swarm-udp
+      protocol: UDP
 
 ---
 apiVersion: networking.k8s.io/v1

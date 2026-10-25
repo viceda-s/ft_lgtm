@@ -14,7 +14,6 @@ FIND  := $(BOLD)$(BLUE)⌕$(RESET)
 DROP  := $(BOLD)$(YELLOW)⊘$(RESET)
 TRASH := $(BOLD)$(YELLOW)🗑$(RESET)
 
-# Runs the shell function named $1 (with args $2) in the background with a spinner labeled $1, logging output to a temp file only shown on failure. The command is invoked as a shell function (not a $(call) argument) so Make's text substitution never touches embedded quotes/brackets.
 define run_spinner
 	label="$(1)"; log="$$(mktemp)"; \
 	( $(2) ) >"$$log" 2>&1 & pid=$$!; \
@@ -35,29 +34,31 @@ define run_spinner
 	exit $$status
 endef
 
-.PHONY: install uninstall up down status smoke-test deploy-kubo deploy-lgtm-stack deploy-backend deploy-frontend
+.PHONY: all install uninstall up down status smoke-test deploy-kubo deploy-lgtm-stack deploy-backend deploy-frontend
+
+all: up
 
 install:
 	@printf "$(FIND) $(BOLD)Checking/installing host dependencies$(RESET)\n"
 	@if ! command -v docker >/dev/null 2>&1; then \
 		$(call run_spinner,Installing Docker...,\
 			sudo apt-get update && \
-			sudo apt-get install -y ca-certificates curl gnupg && \
+			sudo apt-get install -y ca-certificates curl gnupg acl && \
 			sudo install -m 0755 -d /etc/apt/keyrings && \
 			curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
 			sudo chmod a+r /etc/apt/keyrings/docker.gpg && \
 			echo "deb [arch=$$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $$(. /etc/os-release && echo $$VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null && \
 			sudo apt-get update && \
 			sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin && \
-			sudo usermod -aG docker $$USER); \
+			sudo usermod -aG docker $$USER && \
+			sudo setfacl -m user:$$USER:rw /var/run/docker.sock); \
 		printf "$(CHECK) Docker installed: %s\n" "$$(docker --version)"; \
-		echo "  (you may need to log out/in for docker group membership to apply)"; \
 	else \
 		printf "$(CHECK) Docker already installed: %s\n" "$$(docker --version)"; \
 	fi
 	@if ! command -v kubectl >/dev/null 2>&1; then \
 		$(call run_spinner,Installing kubectl...,\
-			curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/$$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
+			curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/$$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$$(dpkg --print-architecture)/kubectl" && \
 			sudo install -o root -g root -m 0755 /tmp/kubectl /usr/local/bin/kubectl && \
 			rm -f /tmp/kubectl); \
 		printf "$(CHECK) kubectl installed: %s\n" "$$(kubectl version --client --short 2>/dev/null || kubectl version --client)"; \
@@ -85,19 +86,8 @@ install:
 		helm repo update)
 	@printf "$(CHECK) $(BOLD)Helm repos added.$(RESET)\n"
 	@echo
-	@if ! command -v go >/dev/null 2>&1; then \
-		$(call run_spinner,Installing Go...,\
-			curl -fsSL -o /tmp/go.tar.gz https://go.dev/dl/go1.27.0.linux-amd64.tar.gz && \
-			sudo rm -rf /usr/local/go && \
-			sudo tar -C /usr/local -xzf /tmp/go.tar.gz && \
-			sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go && \
-			sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt && \
-			rm -f /tmp/go.tar.gz); \
-		printf "$(CHECK) Go installed: %s\n" "$$(go version)"; \
-	else \
-		printf "$(CHECK) Go already installed: %s\n" "$$(go version)"; \
-	fi
-
+	@grep -q 'ipfs.lgtm.local' /etc/hosts || echo "127.0.0.1 lgtm.local grafana.lgtm.local ipfs.lgtm.local" | sudo tee -a /etc/hosts >/dev/null
+	@printf "$(CHECK) lgtm.local, grafana.lgtm.local and ipfs.lgtm.local resolve to 127.0.0.1.\n"
 	@printf "$(CHECK) $(BOLD)All host dependencies present.$(RESET)\n"
 	@echo
 
@@ -117,9 +107,6 @@ uninstall:
 		sudo rm -rf /var/lib/docker /var/lib/containerd && \
 		sudo rm -f /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.gpg)
 	@printf "$(CHECK) Docker removed.\n"
-	@$(call run_spinner,Removing Go...,\
-		sudo rm -rf /usr/local/go /usr/local/bin/go /usr/local/bin/gofmt)
-	@printf "$(CHECK) Go removed.\n"
 	@printf "$(CHECK) $(BOLD)Host dependencies removed.$(RESET)\n"
 	@echo
 
