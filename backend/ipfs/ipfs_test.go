@@ -4,6 +4,7 @@ import (
     "context"
     "io"
     "net/http"
+    "net/http/httptest"
     "os"
     "strings"
     "testing"
@@ -101,7 +102,6 @@ func TestUpload_CancelledContext_ReturnsError(t *testing.T) {
 
 
 func TestUpload_UnreachableAPI_ReturnsError(t *testing.T) {
-    // This test does not require IPFS_TEST_API_URL - it deliberately targets a port nothing is listening on, so it runs unconditionally.
     client, err := NewClient("http://127.0.0.1:1")
     if err != nil {
         t.Fatalf("NewClient failed unexpectedly: %v", err)
@@ -113,5 +113,44 @@ func TestUpload_UnreachableAPI_ReturnsError(t *testing.T) {
     _, err = client.Upload(ctx, "package main\n", "out", "")
     if err == nil {
         t.Fatalf("expected error for unreachable Kubo API, got nil")
+    }
+}
+
+
+func TestUpload_AddResponse_ReturnsWrapperDirectoryCID(t *testing.T) {
+    cases := []struct {
+        name    string
+        body    string
+        wantCID string
+    }{
+        {"wrapper after files", "{\"Name\":\"main.go\",\"Hash\":\"QmFile\"}\n{\"Name\":\"\",\"Hash\":\"QmDir\"}\n", "QmDir"},
+        {"no wrapper", "{\"Name\":\"main.go\",\"Hash\":\"QmFile\"}\n", ""},
+        {"two wrappers", "{\"Name\":\"\",\"Hash\":\"QmA\"}\n{\"Name\":\"\",\"Hash\":\"QmB\"}\n", ""},
+        {"wrapper without hash", "{\"Name\":\"\",\"Hash\":\"\"}\n", ""},
+    }
+    for _, tc := range cases {
+        t.Run(tc.name, func(t *testing.T) {
+            kubo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                _, _ = io.Copy(io.Discard, r.Body)
+                w.Header().Set("Content-Type", "application/json")
+                _, _ = io.WriteString(w, tc.body)
+            }))
+            defer kubo.Close()
+
+            client, err := NewClient(kubo.URL)
+            if err != nil {
+                t.Fatalf("NewClient failed: %v", err)
+            }
+            cid, err := client.Upload(context.Background(), "package main\n", "out", "")
+            if tc.wantCID == "" {
+                if err == nil {
+                    t.Fatalf("expected an error, got CID %q", cid)
+                }
+                return
+            }
+            if err != nil || cid != tc.wantCID {
+                t.Fatalf("expected CID %q, got %q (err: %v)", tc.wantCID, cid, err)
+            }
+        })
     }
 }
