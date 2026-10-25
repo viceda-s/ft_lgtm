@@ -29,8 +29,8 @@ data:
             datasourceUid: loki
             spanStartTimeShift: "-1h"
             spanEndTimeShift: "1h"
-            filterByTraceID: true
-            tags: []
+            customQuery: true
+            query: '{service_name=~".+"} | trace_id="$${__trace.traceId}"'
           tracesToMetrics:
             datasourceUid: mimir
             tags:

@@ -33,7 +33,8 @@
           "custom": {
             "fillOpacity": 80,
             "gradientMode": "opacity"
-          }
+          },
+          "unit": "s"
         }
       },
       "targets": [
@@ -43,15 +44,15 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ trace:rootName = \"/api/execute\" } | avg_over_time(span:duration)"
+          "query": "{ name = \"/api/execute\" } | avg_over_time(duration)"
         }
       ]
     },
     {
       "id": 2,
-      "title": "Slowest /api/execute calls",
+      "title": "Slowest executions",
       "description": "Slowest executions (what's taking so long?)",
-      "type": "timeseries",
+      "type": "table",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -63,16 +64,25 @@
         "uid": "tempo"
       },
       "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "red"
-          },
-          "custom": {
-            "fillOpacity": 80,
-            "gradientMode": "opacity"
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceDuration"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "displayName",
+                "value": "Duration"
+              }
+            ]
           }
-        }
+        ]
       },
       "targets": [
         {
@@ -81,9 +91,19 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ trace:rootName = \"/api/execute\" } | max_over_time(span:duration)"
+          "tableType": "traces",
+          "limit": 50,
+          "query": "{ name = \"/api/execute\" } | select(span.execution.outcome, span.code.cid, span.code.hash)"
         }
-      ]
+      ],
+      "options": {
+        "sortBy": [
+          {
+            "displayName": "Duration",
+            "desc": true
+          }
+        ]
+      }
     },
     {
       "id": 3,
@@ -105,7 +125,8 @@
           "color": {
             "mode": "fixed",
             "fixedColor": "green"
-          }
+          },
+          "unit": "s"
         }
       },
       "options": {
@@ -123,7 +144,7 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ trace:rootName = \"/api/execute\" } | avg_over_time(span:duration)"
+          "query": "{ name = \"/api/execute\" } | avg_over_time(duration)"
         }
       ]
     },
@@ -147,7 +168,8 @@
           "color": {
             "mode": "fixed",
             "fixedColor": "red"
-          }
+          },
+          "unit": "s"
         }
       },
       "options": {
@@ -165,7 +187,7 @@
             "uid": "tempo"
           },
           "queryType": "traceql",
-          "query": "{ trace:rootName = \"/api/execute\" } | max_over_time(span:duration)"
+          "query": "{ name = \"/api/execute\" } | max_over_time(duration)"
         }
       ]
     }
