@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -25,61 +26,89 @@ import (
 const executionTimeout = 5 * time.Second
 const maxOutputBytes = 10 * 1024
 
-// uploadTimeout is the maximum time spent uploading execution results to IPFS. It is independent of executionTimeout and can be tuned separately.
+const compileTimeout = 20 * time.Second
+
 const uploadTimeout = 5 * time.Second
 
-func tracer() trace.Tracer { return otel.Tracer("ft_lgtm/backend/api") }
+const maxRequestBytes = 64 * 1024
+
+const maxConcurrentRuns = 4
+
+const instrumentationName = "ft_lgtm/backend/api"
+
+func tracer() trace.Tracer { return otel.Tracer(instrumentationName) }
+
+var executionOutcomes = []string{"success", "compile_error", "runtime_error", "timeout", "output_limit", "internal_error", "cancelled"}
 
 var (
-	executionsCounterOnce       sync.Once
+	instrumentsOnce             sync.Once
 	executionsCounterInstrument metric.Int64Counter
-	executionsCounterErr        error
+	instrumentsErr              error
 )
 
-func executionsCounter() (metric.Int64Counter, error) {
-	executionsCounterOnce.Do(func() {
-		executionsCounterInstrument, executionsCounterErr = otel.Meter("ft_lgtm/backend/api").Int64Counter(
+func instruments() (metric.Int64Counter, error) {
+	instrumentsOnce.Do(func() {
+		meter := otel.Meter(instrumentationName)
+		executionsCounterInstrument, instrumentsErr = meter.Int64Counter(
 			"code_executions_total",
 			metric.WithDescription("Total number of code executions, labeled by outcome"),
 		)
+		if instrumentsErr != nil {
+			return
+		}
+		for _, outcome := range executionOutcomes {
+			executionsCounterInstrument.Add(context.Background(), 0, metric.WithAttributeSet(attribute.NewSet(attribute.String("outcome", outcome))))
+		}
 	})
-	return executionsCounterInstrument, executionsCounterErr
+	return executionsCounterInstrument, instrumentsErr
 }
 
-// Uploader is satisfied by *ipfs.Client. It lives here (not in the ipfs package) so api can depend on it without ipfs needing to import api, and so handler tests can substitute a network-free fake.
 type Uploader interface {
 	Upload(ctx context.Context, source, stdout, stderr string) (string, error)
 }
 
-// ExecuteRequest is the JSON body for POST /api/execute
 type ExecuteRequest struct {
 	Code string `json:"code"`
 }
 
-// ExecuteResponse is the JSON body returned by POST /api/execute
 type ExecuteResponse struct {
-	Stdout       string `json:"stdout"`
-	Stderr       string `json:"stderr"`
-	Success      bool   `json:"success"`
-	TimedOut     bool   `json:"timed_out"`
-	CompileError string `json:"compile_error,omitempty"`
-	IPFSLink     string `json:"ipfs_link,omitempty"`
+	Stdout          string  `json:"stdout"`
+	Stderr          string  `json:"stderr"`
+	Success         bool    `json:"success"`
+	TimedOut        bool    `json:"timed_out"`
+	OutputTruncated bool    `json:"output_truncated"`
+	CompileError    string  `json:"compile_error,omitempty"`
+	IPFSLink        string  `json:"ipfs_link,omitempty"`
+	TraceID         string  `json:"trace_id,omitempty"`
+	Timings         Timings `json:"timings_ms"`
+}
+
+type Timings struct {
+	Compile    int64 `json:"compile"`
+	Execute    int64 `json:"execute,omitempty"`
+	IPFSUpload int64 `json:"ipfs_upload,omitempty"`
 }
 
 type executeHandler struct {
 	exec       *executor.Executor
 	uploader   Uploader
 	gatewayURL string
+	slots      chan struct{}
 }
 
-// NewHandler returns the POST /api/execute HTTP handler.
-// It compiles the submitted source with TinyGo, runs the result through exec inside its sandboxed Wasmtime store, uploads the source and output to IPFS via uploader, and reports the outcome as JSON.
-// gatewayURL is the public IPFS gateway base (e.g. "http://ipfs.lgtm.local"), used to build IPFSLink.
 func NewHandler(exec *executor.Executor, uploader Uploader, gatewayURL string) http.Handler {
 	if uploader == nil {
 		panic("api: NewHandler called with nil uploader")
 	}
-	return &executeHandler{exec: exec, uploader: uploader, gatewayURL: strings.TrimRight(gatewayURL, "/")}
+	h := &executeHandler{
+		exec:       exec,
+		uploader:   uploader,
+		gatewayURL: strings.TrimRight(gatewayURL, "/"),
+		slots:      make(chan struct{}, maxConcurrentRuns),
+	}
+	instruments()
+	return otelhttp.NewHandler(h, "/api/execute",
+		otelhttp.WithSpanNameFormatter(func(operation string, _ *http.Request) string { return operation }))
 }
 
 func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -89,75 +118,98 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req ExecuteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	ctx, span := tracer().Start(r.Context(), "/api/execute")
-	defer span.End()
+	ctx := r.Context()
+	span := trace.SpanFromContext(ctx)
 
 	hash := sha256.Sum256([]byte(req.Code))
 	codeHash := hex.EncodeToString(hash[:])
 	span.SetAttributes(attribute.String("code.hash", codeHash))
 
 	outcome := "success"
-	defer func() {
-		counter, err := executionsCounter()
-		if err != nil {
-			telemetry.Logger("ft_lgtm/backend/api").ErrorContext(ctx, "constructing executions counter", "error", err)
+	defer func() { recordExecution(ctx, outcome) }()
+
+	logger := telemetry.Logger(instrumentationName)
+
+	select {
+	case h.slots <- struct{}{}:
+		defer func() { <-h.slots }()
+	case <-ctx.Done():
+		outcome = "cancelled"
+		return
+	}
+
+	resp := ExecuteResponse{}
+	if span.SpanContext().HasTraceID() {
+		resp.TraceID = span.SpanContext().TraceID().String()
+	}
+
+	stageStart := time.Now()
+	wasmBytes, err := h.compileWithSpan(ctx, req.Code)
+	resp.Timings.Compile = time.Since(stageStart).Milliseconds()
+	if err != nil {
+		var compileErr *compiler.CompileError
+		if !errors.As(err, &compileErr) {
+			outcome = "internal_error"
+			span.SetStatus(codes.Error, "compiler failed to run")
+			logger.ErrorContext(ctx, "compiler failed to run", "code.hash", codeHash, "error", err)
+			http.Error(w, "internal compilation error", http.StatusInternalServerError)
 			return
 		}
-		counter.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("outcome", outcome))))
-	}()
-
-	logger := telemetry.Logger("ft_lgtm/backend/api")
-
-	wasmBytes, err := h.compileWithSpan(ctx, req.Code)
-	if err != nil {
 		outcome = "compile_error"
 		span.SetStatus(codes.Error, "compile failed")
-		resp := ExecuteResponse{Success: false}
-		var compileErr *compiler.CompileError
-		if errors.As(err, &compileErr) {
-			resp.CompileError = compileErr.Stderr
-		} else {
-			resp.CompileError = err.Error()
-		}
+		resp.CompileError = compileErr.Stderr
 		logger.ErrorContext(ctx, "compilation failed", "code.hash", codeHash, "compile_error", resp.CompileError)
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
+	stageStart = time.Now()
 	result, err := h.runWithSpan(ctx, wasmBytes)
+	resp.Timings.Execute = time.Since(stageStart).Milliseconds()
 	if err != nil {
-		outcome = "runtime_error"
+		outcome = "internal_error"
 		span.SetStatus(codes.Error, "execution error")
 		logger.ErrorContext(ctx, "execution error", "code.hash", codeHash, "error", err)
 		http.Error(w, "internal execution error", http.StatusInternalServerError)
 		return
 	}
 
-	resp := ExecuteResponse{
-		Stdout:   result.Stdout,
-		Stderr:   result.Stderr,
-		TimedOut: result.TimedOut,
-		Success:  !result.TimedOut && result.ExitError == nil,
-	}
+	resp.Stdout = result.Stdout
+	resp.Stderr = result.Stderr
+	resp.TimedOut = result.TimedOut
+	resp.OutputTruncated = result.OutputLimitExceeded
+	resp.Success = !result.TimedOut && !result.OutputLimitExceeded && result.ExitError == nil
 
-	if result.TimedOut {
+	switch {
+	case result.TimedOut:
 		outcome = "timeout"
 		span.SetStatus(codes.Error, "execution timed out")
 		logger.ErrorContext(ctx, "execution timed out", "code.hash", codeHash)
-	} else if result.ExitError != nil {
+	case result.OutputLimitExceeded:
+		outcome = "output_limit"
+		span.SetStatus(codes.Error, "output limit exceeded")
+		logger.ErrorContext(ctx, "execution stopped: output limit exceeded", "code.hash", codeHash, "limit_bytes", maxOutputBytes)
+	case result.ExitError != nil:
 		outcome = "runtime_error"
 		span.SetStatus(codes.Error, result.ExitError.Error())
 		logger.ErrorContext(ctx, "execution exited with error", "code.hash", codeHash, "error", result.ExitError)
-	} else {
+	default:
 		logger.InfoContext(ctx, "execution succeeded", "code.hash", codeHash)
 	}
 
+	stageStart = time.Now()
 	cid, uploadErr := h.uploadWithSpan(ctx, req.Code, result.Stdout, result.Stderr)
+	resp.Timings.IPFSUpload = time.Since(stageStart).Milliseconds()
 	if uploadErr != nil {
 		logger.ErrorContext(ctx, "ipfs upload failed", "code.hash", codeHash, "error", uploadErr)
 	} else {
@@ -166,6 +218,17 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func recordExecution(ctx context.Context, outcome string) {
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("execution.outcome", outcome))
+
+	counter, err := instruments()
+	if err != nil {
+		telemetry.Logger(instrumentationName).ErrorContext(ctx, "constructing execution metrics", "error", err)
+		return
+	}
+	counter.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("outcome", outcome))))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -178,11 +241,15 @@ func (h *executeHandler) compileWithSpan(ctx context.Context, source string) ([]
 	ctx, span := tracer().Start(ctx, "compile")
 	defer span.End()
 
-	wasmBytes, err := compiler.Compile(ctx, source)
+	compileCtx, cancel := context.WithTimeout(ctx, compileTimeout)
+	defer cancel()
+
+	wasmBytes, err := compiler.Compile(compileCtx, source)
 	if err != nil {
 		span.SetStatus(codes.Error, "compile failed")
 		return nil, err
 	}
+	span.SetAttributes(attribute.Int("wasm.size_bytes", len(wasmBytes)))
 	return wasmBytes, nil
 }
 
@@ -195,9 +262,16 @@ func (h *executeHandler) runWithSpan(ctx context.Context, wasmBytes []byte) (exe
 		span.SetStatus(codes.Error, "execution error")
 		return result, err
 	}
-	if result.TimedOut {
+	span.SetAttributes(
+		attribute.Int("execution.stdout_bytes", len(result.Stdout)),
+		attribute.Int("execution.stderr_bytes", len(result.Stderr)),
+	)
+	switch {
+	case result.TimedOut:
 		span.SetStatus(codes.Error, "execution timed out")
-	} else if result.ExitError != nil {
+	case result.OutputLimitExceeded:
+		span.SetStatus(codes.Error, "output limit exceeded")
+	case result.ExitError != nil:
 		span.SetStatus(codes.Error, result.ExitError.Error())
 	}
 	return result, nil

@@ -2,6 +2,7 @@ package executor
 
 import (
     "context"
+    "sync"
     "testing"
     "time"
 
@@ -74,7 +75,7 @@ func main() {
 }
 `)
     exec := NewExecutor()
-    result, err := exec.Run(wasmBytes, 5*time.Second, 1024) // 1KB max output
+    result, err := exec.Run(wasmBytes, 5*time.Second, 1024)
     if err != nil {
         t.Fatalf("Run returned infrastructure error: %v", err)
     }
@@ -84,11 +85,94 @@ func main() {
     if len(result.Stdout) == 0 {
         t.Fatal("expected some stdout captured before truncation, got none")
     }
+    if !result.OutputLimitExceeded {
+        t.Fatal("expected OutputLimitExceeded=true when the program writes past the cap")
+    }
+}
+
+
+func TestExecutor_Run_EndlessOutput_StopsAtLimitInsteadOfRunningToTimeout(t *testing.T) {
+    wasmBytes := compileFixture(t, `package main
+
+func main() {
+    for {
+        println("flooding the output")
+    }
+}
+`)
+    exec := NewExecutor()
+    start := time.Now()
+    result, err := exec.Run(wasmBytes, 5*time.Second, 1024)
+    elapsed := time.Since(start)
+
+    if err != nil {
+        t.Fatalf("Run returned infrastructure error: %v", err)
+    }
+    if result.TimedOut {
+        t.Fatal("expected the output cap to stop the program before its 5s timeout")
+    }
+    if !result.OutputLimitExceeded {
+        t.Fatal("expected OutputLimitExceeded=true")
+    }
+    if result.ExitError == nil {
+        t.Fatal("expected ExitError to be set when the program is stopped for exceeding the output cap")
+    }
+    if elapsed > 2*time.Second {
+        t.Fatalf("expected the program to be stopped as soon as it exceeded the cap, took %v", elapsed)
+    }
+}
+
+
+func TestExecutor_Run_OneTimeoutDoesNotInterruptConcurrentRuns(t *testing.T) {
+    loop := compileFixture(t, `package main
+
+func main() {
+    for {
+    }
+}
+`)
+    sleeper := compileFixture(t, `package main
+
+import "time"
+
+func main() {
+    time.Sleep(time.Second)
+    println("done")
+}
+`)
+    exec := NewExecutor()
+
+    var wg sync.WaitGroup
+    var sleeperResult Result
+    var sleeperErr error
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        sleeperResult, sleeperErr = exec.Run(sleeper, 5*time.Second, 10*1024)
+    }()
+
+    loopResult, err := exec.Run(loop, 300*time.Millisecond, 10*1024)
+    if err != nil {
+        t.Fatalf("Run returned infrastructure error: %v", err)
+    }
+    if !loopResult.TimedOut {
+        t.Fatal("expected the infinite loop to time out")
+    }
+
+    wg.Wait()
+    if sleeperErr != nil {
+        t.Fatalf("Run returned infrastructure error: %v", sleeperErr)
+    }
+    if sleeperResult.TimedOut {
+        t.Fatal("expected the concurrent run to finish: another run's timeout must not interrupt it")
+    }
+    if sleeperResult.ExitError != nil {
+        t.Fatalf("expected the concurrent run to exit cleanly, got: %v", sleeperResult.ExitError)
+    }
 }
 
 
 func TestExecutor_Run_ExcessiveMemory_FailsRatherThanExhaustingHost(t *testing.T) {
-    // Allocates a large slice repeatedly to exceed the ~10MB store limit.
     wasmBytes := compileFixture(t, `package main
 
 func main() {

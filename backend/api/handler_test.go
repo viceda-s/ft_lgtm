@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"ft_lgtm/backend/executor"
@@ -15,8 +16,11 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	logglobal "go.opentelemetry.io/otel/log/global"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestHandler_ValidCode_ReturnsStdoutAndSuccess(t *testing.T) {
@@ -125,7 +129,6 @@ func TestHandler_RuntimeFailure_StillIncludesIPFSLink(t *testing.T) {
 	uploader := &fakeUploader{cid: "bafyFAKECID"}
 	handler := NewHandler(exec, uploader, "http://ipfs.lgtm.local")
 
-	//Compiles fine, but panics at runtime
 	body := `{"code": "package main\n\nfunc main() {\n\tvar s []int\n\t_ = s[5]\n}\n"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -225,7 +228,6 @@ func TestHandler_UploadFails_Returns200WithoutIPFSLink(t *testing.T) {
 	}
 }
 
-// withTestTracerProvider installs an in-memory span recorder as the global TracerProvider for the duration of one test, restoring the previous global provider afterward so tests don't leak state into each other.
 func withTestTracerProvider(t *testing.T) *tracetest.SpanRecorder {
 	t.Helper()
 	recorder := tracetest.NewSpanRecorder()
@@ -589,5 +591,157 @@ func TestHandler_UploadFails_LogsErrorWithTraceID(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected a log record carrying trace_id %s, got none among %d records", upload.SpanContext().TraceID(), len(logExporter.records))
+	}
+}
+
+func TestHandler_OversizedBody_Returns413(t *testing.T) {
+	exec := executor.NewExecutor()
+	handler := NewHandler(exec, &fakeUploader{cid: "bafyFAKECID"}, "http://ipfs.lgtm.local")
+
+	body := `{"code": "` + strings.Repeat("a", maxRequestBytes) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected status 413 for a body over %d bytes, got %d", maxRequestBytes, rec.Code)
+	}
+}
+
+func TestHandler_ValidCode_RootSpanIsHTTPServerSpan(t *testing.T) {
+	recorder := withTestTracerProvider(t)
+	exec := executor.NewExecutor()
+	handler := NewHandler(exec, &fakeUploader{cid: "bafyFAKECID"}, "http://ipfs.lgtm.local")
+
+	body := `{"code": "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	var root sdktrace.ReadOnlySpan
+	for _, s := range recorder.Ended() {
+		if s.Name() == "/api/execute" {
+			root = s
+		}
+	}
+	if root == nil {
+		t.Fatal("expected a span named \"/api/execute\"")
+	}
+	if root.SpanKind() != trace.SpanKindServer {
+		t.Fatalf("expected the root span to be a server span, got %s", root.SpanKind())
+	}
+	attrs := map[string]string{}
+	for _, attr := range root.Attributes() {
+		attrs[string(attr.Key)] = attr.Value.Emit()
+	}
+	if attrs["http.request.method"] != http.MethodPost {
+		t.Fatalf("expected http.request.method=POST on the root span, got attributes %v", attrs)
+	}
+	if attrs["execution.outcome"] != "success" {
+		t.Fatalf("expected execution.outcome=success on the root span, got attributes %v", attrs)
+	}
+}
+
+func TestHandler_ValidCode_ReturnsTraceIDAndStageTimings(t *testing.T) {
+	recorder := withTestTracerProvider(t)
+	exec := executor.NewExecutor()
+	handler := NewHandler(exec, &fakeUploader{cid: "bafyFAKECID"}, "http://ipfs.lgtm.local")
+
+	body := `{"code": "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	var resp ExecuteResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	var root sdktrace.ReadOnlySpan
+	for _, s := range recorder.Ended() {
+		if s.Name() == "/api/execute" {
+			root = s
+		}
+	}
+	if root == nil {
+		t.Fatal("expected a span named \"/api/execute\"")
+	}
+	if resp.TraceID != root.SpanContext().TraceID().String() {
+		t.Fatalf("expected trace_id %s in the response, got %q", root.SpanContext().TraceID(), resp.TraceID)
+	}
+	if resp.Timings.Compile <= 0 {
+		t.Fatalf("expected a positive compile timing, got %+v", resp.Timings)
+	}
+}
+
+func TestHandler_EndlessOutput_ReportsTruncatedFailure(t *testing.T) {
+	recorder := withTestTracerProvider(t)
+	exec := executor.NewExecutor()
+	handler := NewHandler(exec, &fakeUploader{cid: "bafyFAKECID"}, "http://ipfs.lgtm.local")
+
+	body := `{"code": "package main\n\nfunc main() {\n\tfor {\n\t\tprintln(\"spam\")\n\t}\n}\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/execute", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	var resp ExecuteResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Success {
+		t.Fatal("expected Success=false when the output limit stops the program")
+	}
+	if !resp.OutputTruncated {
+		t.Fatal("expected output_truncated=true")
+	}
+	if len(resp.Stdout)+len(resp.Stderr) > maxOutputBytes {
+		t.Fatalf("expected at most %d bytes of output, got %d", maxOutputBytes, len(resp.Stdout)+len(resp.Stderr))
+	}
+	for _, s := range recorder.Ended() {
+		if s.Name() == "/api/execute" && s.Status().Code != codes.Error {
+			t.Fatalf("expected the root span to have Error status, got %s", s.Status().Code)
+		}
+	}
+}
+
+func TestNewHandler_ExecutionCountersStartAtZero(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	instrumentsOnce = sync.Once{}
+	t.Cleanup(func() {
+		otel.SetMeterProvider(previous)
+		instrumentsOnce = sync.Once{}
+	})
+
+	NewHandler(nil, &fakeUploader{cid: "bafyFAKECID"}, "http://ipfs.lgtm.local")
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collecting metrics: %v", err)
+	}
+	zeroed := map[string]bool{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if m.Name != "code_executions_total" || !ok {
+				continue
+			}
+			for _, dp := range sum.DataPoints {
+				if outcome, _ := dp.Attributes.Value("outcome"); dp.Value == 0 {
+					zeroed[outcome.AsString()] = true
+				}
+			}
+		}
+	}
+	if len(zeroed) != len(executionOutcomes) {
+		t.Fatalf("expected a code_executions_total series at 0 for each of %v before any request, got %v", executionOutcomes, zeroed)
 	}
 }

@@ -1,73 +1,90 @@
 package executor
 
 import (
+    "bytes"
+    "encoding/binary"
     "fmt"
-    "os"
     "time"
 
     "github.com/bytecodealliance/wasmtime-go/v48"
 )
 
 
-// Result holds the outcome of running one WASM module.
+const epochTick = 10 * time.Millisecond
+
+const (
+    wasiErrnoSuccess = 0
+    wasiErrnoBadf    = 8
+    wasiErrnoFault   = 21
+)
+
+
 type Result struct {
-    Stdout    string
-    Stderr    string
-    TimedOut  bool
-    ExitError error // the wasm module's own trap/exit error, if any (nil on clean exit)
+    Stdout              string
+    Stderr              string
+    TimedOut            bool
+    OutputLimitExceeded bool
+    ExitError           error
 }
 
 
-// Executor owns a single long-lived Wasmtime Engine shared across all runs.
-// Engine creation is expensive; Engine is documented as safe to share across goroutines, so one Executor should be constructed once per process.
 type Executor struct {
     engine *wasmtime.Engine
+    stop   chan struct{}
 }
 
 
-// NewExecutor builds the shared engine with epoch interruption enabled.
-// Epoch interruption is how per-run timeouts are enforced: each Run creates its own Store with a near-term epoch deadline, and a goroutine ticks the shared engine's epoch forward after the caller's timeout elapses.
 func NewExecutor() *Executor {
     config := wasmtime.NewConfig()
     config.SetEpochInterruption(true)
-    engine := wasmtime.NewEngineWithConfig(config)
-    return &Executor{engine: engine}
+    e := &Executor{
+        engine: wasmtime.NewEngineWithConfig(config),
+        stop:   make(chan struct{}),
+    }
+    go e.tickEpochs()
+    return e
 }
 
 
-// Run instantiates wasmBytes in a fresh, sandboxed Store and calls its  WASI command entrypoint (_start). The sandbox grants no filesystem  preopens and no network capability (both achieved by omission — this  WasiConfig never calls PreopenDir, and plain WASI preview 1 command  modules have no socket imports to begin with), caps linear memory at  ~10MB, and enforces timeout via epoch interruption. Stdout/stderr are  captured through temp files (wasmtime-go's WasiConfig only supports  file-path-based output capture, not an in-process io.Writer) and  truncated to maxOutputBytes after the run completes.
+func (e *Executor) tickEpochs() {
+    ticker := time.NewTicker(epochTick)
+    defer ticker.Stop()
+    for {
+        select {
+        case <-ticker.C:
+            e.engine.IncrementEpoch()
+        case <-e.stop:
+            return
+        }
+    }
+}
+
+
+func (e *Executor) Close() {
+    close(e.stop)
+}
+
+
 func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes int) (Result, error) {
     store := wasmtime.NewStore(e.engine)
-    store.SetEpochDeadline(1)
-    store.Limiter(int64(10*1024*1024), -1, -1, -1, -1) // ~10MB memory cap, other resources unlimited
-
-    stdoutFile, err := os.CreateTemp("", "lgtm-stdout-*")
-    if err != nil {
-        return Result{}, fmt.Errorf("creating stdout temp file: %w", err)
-    }
-    defer os.Remove(stdoutFile.Name())
-    defer stdoutFile.Close()
-
-    stderrFile, err := os.CreateTemp("", "lgtm-stderr-*")
-    if err != nil {
-        return Result{}, fmt.Errorf("creating stderr temp file: %w", err)
-    }
-    defer os.Remove(stderrFile.Name())
-    defer stderrFile.Close()
+    defer store.Close()
+    store.SetEpochDeadline(uint64(timeout/epochTick) + 1)
+    store.Limiter(int64(10*1024*1024), -1, -1, -1, -1)
 
     wasiConfig := wasmtime.NewWasiConfig()
     wasiConfig.SetArgv([]string{"prog"})
-    if err := wasiConfig.SetStdoutFile(stdoutFile.Name()); err != nil {
-        return Result{}, fmt.Errorf("wiring stdout capture: %w", err)
-    }
-    if err := wasiConfig.SetStderrFile(stderrFile.Name()); err != nil {
-        return Result{}, fmt.Errorf("wiring stderr capture: %w", err)
-    }
     store.SetWasi(wasiConfig)
 
+    output := &outputCapture{limit: maxOutputBytes, remaining: maxOutputBytes}
+
     linker := wasmtime.NewLinker(e.engine)
+    defer linker.Close()
     if err := linker.DefineWasi(); err != nil {
         return Result{}, fmt.Errorf("defining WASI imports: %w", err)
+    }
+    linker.AllowShadowing(true)
+    if err := linker.FuncWrap("wasi_snapshot_preview1", "fd_write", output.fdWrite); err != nil {
+        return Result{}, fmt.Errorf("overriding WASI fd_write: %w", err)
     }
 
     module, err := wasmtime.NewModule(e.engine, wasmBytes)
@@ -85,52 +102,97 @@ func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes i
         return Result{}, fmt.Errorf("wasm module has no _start function (not a WASI command module)")
     }
 
-    deadline := make(chan struct{})
-    go func() {
-        select {
-        case <-time.After(timeout):
-            e.engine.IncrementEpoch()
-        case <-deadline:
-        }
-    }()
-
     _, callErr := start.Call(store)
-    close(deadline)
 
     result := Result{
-        Stdout: readTruncated(stdoutFile.Name(), maxOutputBytes),
-        Stderr: readTruncated(stderrFile.Name(), maxOutputBytes),
+        Stdout:              output.stdout.String(),
+        Stderr:              output.stderr.String(),
+        OutputLimitExceeded: output.exceeded,
     }
-
-    if callErr != nil {
-        if trap, ok := callErr.(*wasmtime.Trap); ok && trap.Code() != nil && *trap.Code() == wasmtime.Interrupt {
-            result.TimedOut = true
-        } else if wasmErr, ok := callErr.(*wasmtime.Error); ok {
-            if exitCode, isExit := wasmErr.ExitStatus(); isExit {
-                if exitCode != 0 {
-                    result.ExitError = callErr
-                }
-                // exitCode == 0: clean WASI exit, not an error
-            } else {
-                result.ExitError = callErr
-            }
-        } else {
-            result.ExitError = callErr
-        }
-    }
+    result.TimedOut, result.ExitError = classifyCallError(callErr, output.exceeded)
     return result, nil
 }
 
 
-// readTruncated reads up to maxBytes from the file at path. Any read error (including the file being empty or missing content) yields an empty string rather than propagating, since a truncated/absent output stream is not an infrastructure failure.
-func readTruncated(path string, maxBytes int) string {
-    f, err := os.Open(path)
-    if err != nil {
-        return ""
+func classifyCallError(callErr error, outputExceeded bool) (timedOut bool, exitErr error) {
+    if callErr == nil {
+        return false, nil
     }
-    defer f.Close()
+    if outputExceeded {
+        return false, callErr
+    }
+    if trap, ok := callErr.(*wasmtime.Trap); ok && trap.Code() != nil && *trap.Code() == wasmtime.Interrupt {
+        return true, nil
+    }
+    if wasmErr, ok := callErr.(*wasmtime.Error); ok {
+        if exitCode, isExit := wasmErr.ExitStatus(); isExit && exitCode == 0 {
+            return false, nil
+        }
+    }
+    return false, callErr
+}
 
-    buf := make([]byte, maxBytes)
-    n, _ := f.Read(buf)
-    return string(buf[:n])
+
+type outputCapture struct {
+    stdout    bytes.Buffer
+    stderr    bytes.Buffer
+    limit     int
+    remaining int
+    exceeded  bool
+}
+
+
+func (o *outputCapture) fdWrite(caller *wasmtime.Caller, fd, iovs, iovsLen, nwritten int32) (int32, *wasmtime.Trap) {
+    var dst *bytes.Buffer
+    switch fd {
+    case 1:
+        dst = &o.stdout
+    case 2:
+        dst = &o.stderr
+    default:
+        return wasiErrnoBadf, nil
+    }
+
+    memExport := caller.GetExport("memory")
+    if memExport == nil || memExport.Memory() == nil {
+        return wasiErrnoFault, nil
+    }
+    mem := memExport.Memory().UnsafeData(caller)
+
+    var written uint32
+    for i := uint32(0); i < uint32(iovsLen); i++ {
+        iov, ok := memSlice(mem, uint32(iovs)+i*8, 8)
+        if !ok {
+            return wasiErrnoFault, nil
+        }
+        data, ok := memSlice(mem, binary.LittleEndian.Uint32(iov[0:4]), binary.LittleEndian.Uint32(iov[4:8]))
+        if !ok {
+            return wasiErrnoFault, nil
+        }
+        if len(data) > o.remaining {
+            dst.Write(data[:o.remaining])
+            o.remaining = 0
+            o.exceeded = true
+            return 0, wasmtime.NewTrap(fmt.Sprintf("output limit of %d bytes exceeded", o.limit))
+        }
+        dst.Write(data)
+        o.remaining -= len(data)
+        written += uint32(len(data))
+    }
+
+    out, ok := memSlice(mem, uint32(nwritten), 4)
+    if !ok {
+        return wasiErrnoFault, nil
+    }
+    binary.LittleEndian.PutUint32(out, written)
+    return wasiErrnoSuccess, nil
+}
+
+
+func memSlice(mem []byte, offset, length uint32) ([]byte, bool) {
+    end := uint64(offset) + uint64(length)
+    if end > uint64(len(mem)) {
+        return nil, false
+    }
+    return mem[offset:end], true
 }

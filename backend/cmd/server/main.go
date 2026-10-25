@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"ft_lgtm/backend/telemetry"
 )
 
-// healthHandler answers /healthz and /readyz identically: this process has no external dependency (database, cache) whose live state would make liveness and readiness meaningfully different, so both probes just confirm the HTTP server itself is accepting and completing requests.
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -55,16 +55,27 @@ func main() {
 	}
 
 	exec := executor.NewExecutor()
+	defer exec.Close()
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/execute", api.NewHandler(exec, ipfsClient, ipfsGatewayURL))
 	mux.HandleFunc("/healthz", healthHandler)
 	mux.HandleFunc("/readyz", healthHandler)
 
-	addr := ":8080"
+	server := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("http shutdown: %v", err)
+		}
+	}()
+
 	log.Printf("listening on %s (ipfs api=%s gateway=%s otlp endpoint=%s)",
-		addr, ipfsAPIURL, ipfsGatewayURL, getEnvOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"))
-	if err := http.ListenAndServe(addr, mux); err != nil {
+		server.Addr, ipfsAPIURL, ipfsGatewayURL, getEnvOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"))
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Print(err)
 	}
 }
