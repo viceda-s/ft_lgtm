@@ -59,6 +59,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/execute", api.NewHandler(exec, ipfsClient, ipfsGatewayURL))
+	mux.Handle("GET /api/share/{id}", api.NewShareHandler(ipfsClient, ipfsGatewayURL))
 	mux.HandleFunc("/healthz", healthHandler)
 	mux.HandleFunc("/readyz", healthHandler)
 

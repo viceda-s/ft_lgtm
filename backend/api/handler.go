@@ -65,6 +65,7 @@ func instruments() (metric.Int64Counter, error) {
 
 type Uploader interface {
 	Upload(ctx context.Context, source, stdout, stderr string) (string, error)
+	Share(ctx context.Context, cid string) (string, error)
 }
 
 type ExecuteRequest struct {
@@ -79,6 +80,7 @@ type ExecuteResponse struct {
 	OutputTruncated bool    `json:"output_truncated"`
 	CompileError    string  `json:"compile_error,omitempty"`
 	IPFSLink        string  `json:"ipfs_link,omitempty"`
+	ShareID         string  `json:"share_id,omitempty"`
 	TraceID         string  `json:"trace_id,omitempty"`
 	Timings         Timings `json:"timings_ms"`
 }
@@ -215,6 +217,11 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		resp.IPFSLink = h.gatewayURL + "/ipfs/" + cid
 		span.SetAttributes(attribute.String("code.cid", cid))
+		if shareID, err := h.shareWithSpan(ctx, cid); err != nil {
+			logger.ErrorContext(ctx, "creating share link failed", "code.hash", codeHash, "code.cid", cid, "error", err)
+		} else {
+			resp.ShareID = shareID
+		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -291,4 +298,20 @@ func (h *executeHandler) uploadWithSpan(ctx context.Context, source, stdout, std
 	}
 	span.SetAttributes(attribute.String("code.cid", cid))
 	return cid, nil
+}
+
+func (h *executeHandler) shareWithSpan(ctx context.Context, cid string) (string, error) {
+	ctx, span := tracer().Start(ctx, "share_link")
+	defer span.End()
+
+	shareCtx, cancel := context.WithTimeout(ctx, uploadTimeout)
+	defer cancel()
+
+	id, err := h.uploader.Share(shareCtx, cid)
+	if err != nil {
+		span.SetStatus(codes.Error, "creating share link failed")
+		return "", err
+	}
+	span.SetAttributes(attribute.String("share.id", id))
+	return id, nil
 }

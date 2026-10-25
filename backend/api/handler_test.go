@@ -94,12 +94,18 @@ func TestHandler_MalformedJSON_Returns400(t *testing.T) {
 }
 
 type fakeUploader struct {
-	cid string
-	err error
+	cid      string
+	err      error
+	shareID  string
+	shareErr error
 }
 
 func (f *fakeUploader) Upload(ctx context.Context, source, stdout, stderr string) (string, error) {
 	return f.cid, f.err
+}
+
+func (f *fakeUploader) Share(ctx context.Context, cid string) (string, error) {
+	return f.shareID, f.shareErr
 }
 
 func TestHandler_ValidCode_IncludesIPFSLink(t *testing.T) {
