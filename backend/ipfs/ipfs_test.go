@@ -10,6 +10,10 @@ import (
     "strings"
     "testing"
     "time"
+
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/propagation"
+    sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func testClient(t *testing.T) (*Client, string) {
@@ -273,5 +277,67 @@ func TestSharedCode_UnknownID_ReturnsErrShareNotFound(t *testing.T) {
     _, _, err := client.SharedCode(context.Background(), "abcdefgh")
     if !errors.Is(err, ErrShareNotFound) {
         t.Fatalf("expected ErrShareNotFound, got %v", err)
+    }
+}
+
+
+func TestProvide_PropagatesTraceAndWaitsForKubo(t *testing.T) {
+    prevTP, prevProp := otel.GetTracerProvider(), otel.GetTextMapPropagator()
+    otel.SetTracerProvider(sdktrace.NewTracerProvider())
+    otel.SetTextMapPropagator(propagation.TraceContext{})
+    t.Cleanup(func() { otel.SetTracerProvider(prevTP); otel.SetTextMapPropagator(prevProp) })
+
+    var traceparent, providedCID string
+    kubo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if r.URL.Path != "/api/v0/routing/provide" {
+            t.Errorf("unexpected Kubo call %s", r.URL.Path)
+        }
+        traceparent = r.Header.Get("traceparent")
+        providedCID = r.URL.Query().Get("arg")
+        w.Header().Set("Content-Type", "application/json")
+        w.(http.Flusher).Flush()
+        time.Sleep(50 * time.Millisecond)
+        _, _ = io.WriteString(w, `{"Type":2}`+"\n")
+    }))
+    defer kubo.Close()
+    client, err := NewClient(kubo.URL)
+    if err != nil {
+        t.Fatalf("NewClient failed: %v", err)
+    }
+
+    ctx, span := otel.Tracer("test").Start(context.Background(), "ipfs_provide")
+    started := time.Now()
+    err = client.Provide(ctx, "QmCodeDir")
+    span.End()
+
+    if err != nil {
+        t.Fatalf("Provide failed: %v", err)
+    }
+    if time.Since(started) < 50*time.Millisecond {
+        t.Fatal("Provide returned before Kubo finished announcing")
+    }
+    if providedCID != "QmCodeDir" {
+        t.Fatalf("expected routing/provide for QmCodeDir, got %q", providedCID)
+    }
+    if !strings.Contains(traceparent, span.SpanContext().TraceID().String()) {
+        t.Fatalf("expected a traceparent carrying trace %s, got %q", span.SpanContext().TraceID(), traceparent)
+    }
+}
+
+
+func TestProvide_KuboError_ReturnsError(t *testing.T) {
+    kubo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(http.StatusInternalServerError)
+        _, _ = io.WriteString(w, `{"Message":"cannot provide, no connected peers","Code":0,"Type":"error"}`)
+    }))
+    defer kubo.Close()
+    client, err := NewClient(kubo.URL)
+    if err != nil {
+        t.Fatalf("NewClient failed: %v", err)
+    }
+
+    if err := client.Provide(context.Background(), "QmCodeDir"); err == nil || !strings.Contains(err.Error(), "no connected peers") {
+        t.Fatalf("expected Kubo's error, got %v", err)
     }
 }

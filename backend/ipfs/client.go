@@ -13,6 +13,7 @@ import (
 
     "github.com/ipfs/boxo/files"
     rpc "github.com/ipfs/kubo/client/rpc"
+    "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 
@@ -22,7 +23,11 @@ type Client struct {
 
 
 func NewClient(apiURL string) (*Client, error) {
-    api, err := rpc.NewURLApiWithClient(apiURL, &http.Client{})
+    transport := otelhttp.NewTransport(http.DefaultTransport,
+        otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+            return "kubo " + strings.TrimPrefix(r.URL.Path, "/api/v0/")
+        }))
+    api, err := rpc.NewURLApiWithClient(apiURL, &http.Client{Transport: transport})
     if err != nil {
         return nil, fmt.Errorf("contructing kubo rpc client: %w", err)
     }
@@ -154,4 +159,20 @@ func (c *Client) sharedCID(ctx context.Context, id string) (string, error) {
         return "", fmt.Errorf("kubo files stat failed: %w", err)
     }
     return stat.Hash, nil
+}
+
+
+func (c *Client) Provide(ctx context.Context, cid string) error {
+    resp, err := c.api.Request("routing/provide", cid).Send(ctx)
+    if err != nil {
+        return fmt.Errorf("sending provide request: %w", err)
+    }
+    defer resp.Close()
+    if resp.Error != nil {
+        return fmt.Errorf("kubo provide failed: %w", resp.Error)
+    }
+    if _, err := io.Copy(io.Discard, resp.Output); err != nil {
+        return fmt.Errorf("waiting for provide to finish: %w", err)
+    }
+    return nil
 }
