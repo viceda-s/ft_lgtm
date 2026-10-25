@@ -18,6 +18,7 @@ FIND  := $(BOLD)$(BLUE)⌕$(RESET)
 DROP  := $(BOLD)$(YELLOW)⊘$(RESET)
 TRASH := $(BOLD)$(YELLOW)🗑$(RESET)
 
+# ends in (exit) not exit: inside an if, a bare exit would end the shell before the caller's ✓ printf
 define run_spinner
 	label="$(1)"; log="$$(mktemp)"; \
 	( $(2) ) >"$$log" 2>&1 & pid=$$!; \
@@ -35,16 +36,18 @@ define run_spinner
 		cat "$$log"; \
 	fi; \
 	rm -f "$$log"; \
-	exit $$status
+	(exit $$status)
 endef
 
 .PHONY: all install uninstall up down status smoke-test deploy-kubo deploy-lgtm-stack deploy-backend deploy-frontend
 
 all: up
 
+# sudo -v runs before each spinner: a password prompt inside the backgrounded command is hidden by the redraw
 install:
 	@printf "$(FIND) $(BOLD)Checking/installing host dependencies$(RESET)\n"
 	@if ! command -v docker >/dev/null 2>&1; then \
+		sudo -v || exit 1; \
 		$(call run_spinner,Installing Docker...,\
 			sudo apt-get update && \
 			sudo apt-get install -y ca-certificates curl gnupg acl && \
@@ -55,30 +58,33 @@ install:
 			sudo apt-get update && \
 			sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin && \
 			sudo usermod -aG docker $$USER && \
-			sudo setfacl -m user:$$USER:rw /var/run/docker.sock); \
+			sudo setfacl -m user:$$USER:rw /var/run/docker.sock) && \
 		printf "$(CHECK) Docker installed: %s\n" "$$(docker --version)"; \
 	else \
 		printf "$(CHECK) Docker already installed: %s\n" "$$(docker --version)"; \
 	fi
 	@if ! command -v kubectl >/dev/null 2>&1; then \
+		sudo -v || exit 1; \
 		$(call run_spinner,Installing kubectl...,\
 			curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/$$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$$(dpkg --print-architecture)/kubectl" && \
 			sudo install -o root -g root -m 0755 /tmp/kubectl /usr/local/bin/kubectl && \
-			rm -f /tmp/kubectl); \
+			rm -f /tmp/kubectl) && \
 		printf "$(CHECK) kubectl installed: %s\n" "$$(kubectl version --client --short 2>/dev/null || kubectl version --client)"; \
 	else \
 		printf "$(CHECK) kubectl already installed: %s\n" "$$(kubectl version --client --short 2>/dev/null || kubectl version --client)"; \
 	fi
 	@if ! command -v k3d >/dev/null 2>&1; then \
+		sudo -v || exit 1; \
 		$(call run_spinner,Installing k3d...,\
-			curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash); \
+			curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash) && \
 		printf "$(CHECK) k3d installed: %s\n" "$$(k3d version | head -1)"; \
 	else \
 		printf "$(CHECK) k3d already installed: %s\n" "$$(k3d version | head -1)"; \
 	fi
 	@if ! command -v helm >/dev/null 2>&1; then \
+		sudo -v || exit 1; \
 		$(call run_spinner,Installing helm...,\
-			curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash); \
+			curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash) && \
 		printf "$(CHECK) helm installed: %s\n" "$$(helm version --short)"; \
 	else \
 		printf "$(CHECK) helm already installed: %s\n" "$$(helm version --short)"; \
@@ -97,6 +103,7 @@ install:
 
 uninstall:
 	@printf "$(DROP) $(BOLD)Removing host dependencies$(RESET)\n"
+	@sudo -v
 	@$(call run_spinner,Removing k3d...,\
 		sudo rm -f $$(command -v k3d))
 	@printf "$(CHECK) k3d removed.\n"
@@ -120,7 +127,7 @@ up: install
 		printf "$(CHECK) Cluster '$(K3D_CLUSTER_NAME)' already exists, skipping creation.\n"; \
 	else \
 		$(call run_spinner,Creating k3d cluster '$(K3D_CLUSTER_NAME)'...,\
-			k3d cluster create --config $(K3D_CONFIG)); \
+			k3d cluster create --config $(K3D_CONFIG)) && \
 		printf "$(CHECK) Cluster '$(K3D_CLUSTER_NAME)' created.\n"; \
 	fi
 	@kubectl config use-context k3d-$(K3D_CLUSTER_NAME) >/dev/null
@@ -129,6 +136,14 @@ up: install
 			kubectl wait --for=condition=ready nodes --all --timeout=60s)
 	@printf "$(CHECK) $(BOLD)Cluster nodes ready.$(RESET)\n"
 	@echo
+
+	@# a helm killed mid-run (Ctrl+C, Docker restart) leaves its release locked in pending-*; a first install has nothing to roll back to
+	@helm list -A --pending --no-headers | while read -r name ns rev _; do \
+		[ -n "$$name" ] || continue; \
+		printf "$(DROP) Releasing Helm lock on '%s' left by an interrupted run.\n" "$$name"; \
+		if [ "$$rev" = 1 ]; then helm uninstall "$$name" -n "$$ns" --wait >/dev/null; \
+		else helm rollback "$$name" -n "$$ns" --wait >/dev/null; fi || exit 1; \
+	done
 
 	@$(call run_spinner,Installing ingress-nginx...,\
 			helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx --force-update && \

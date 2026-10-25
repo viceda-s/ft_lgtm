@@ -148,10 +148,7 @@
           },
           "custom": {
             "fillOpacity": 40,
-            "gradientMode": "opacity",
-            "stacking": {
-              "mode": "normal"
-            }
+            "gradientMode": "opacity"
           },
           "decimals": 0
         }
