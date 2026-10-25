@@ -1,4 +1,4 @@
-*This project has been created as part of the 42 curriculum by luis-fif & viceda-s.*
+_This project has been created as part of the 42 curriculum by luis-fif, viceda-s._
 
 # ft_lgtm
 
