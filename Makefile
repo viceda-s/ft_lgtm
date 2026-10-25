@@ -144,7 +144,7 @@ up: install
 deploy-kubo:
 	@$(call run_spinner,Deploying Kubo (IPFS)...,\
 			kubectl apply -f k8s/kubo.yaml && \
-			kubectl wait --for=condition=ready pod -l app=kubo --timeout=120s)
+			kubectl rollout status deployment/kubo --timeout=120s)
 	@printf "$(CHECK) $(BOLD)Kubo (IPFS) deployed and ready.$(RESET)\n"
 	@echo
 
