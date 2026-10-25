@@ -1,6 +1,10 @@
 SHELL := /bin/bash
 K3D_CLUSTER_NAME := lgtm
 K3D_CONFIG := k8s/k3d-cluster.yaml
+PRUNE_IMAGES = docker image prune -f --filter label=ft-lgtm >/dev/null; \
+	for node in $$(docker ps --filter label=k3d.cluster=$(K3D_CLUSTER_NAME) --format '{{.Names}}' | grep -E -- '-(server|agent)-'); do \
+		docker exec $$node crictl rmi --prune >/dev/null 2>&1; \
+	done
 
 GREEN  := \033[0;32m
 YELLOW := \033[0;33m
@@ -226,6 +230,7 @@ deploy-backend:
 			kubectl rollout restart deployment/backend && \
 			kubectl rollout status deployment/backend --timeout=60s)
 	@printf "$(CHECK) $(BOLD)Backend deployed and ready.$(RESET)\n"
+	@$(PRUNE_IMAGES)
 	@echo
 
 deploy-frontend:
@@ -239,6 +244,7 @@ deploy-frontend:
 			kubectl rollout restart deployment/frontend && \
 			kubectl rollout status deployment/frontend --timeout=60s)
 	@printf "$(CHECK) $(BOLD)Frontend deployed and ready.$(RESET)\n"
+	@$(PRUNE_IMAGES)
 	@echo
 
 down:
