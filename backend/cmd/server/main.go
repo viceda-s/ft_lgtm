@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"embed"
-	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -16,9 +14,6 @@ import (
 	"ft_lgtm/backend/ipfs"
 	"ft_lgtm/backend/telemetry"
 )
-
-//go:embed static
-var embeddedStatic embed.FS
 
 // healthHandler answers /healthz and /readyz identically: this process has no external dependency (database, cache) whose live state would make liveness and readiness meaningfully different, so both probes just confirm the HTTP server itself is accepting and completing requests.
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
@@ -61,16 +56,10 @@ func main() {
 
 	exec := executor.NewExecutor()
 
-	staticFS, err := fs.Sub(embeddedStatic, "static")
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	mux := http.NewServeMux()
 	mux.Handle("/api/execute", api.NewHandler(exec, ipfsClient, ipfsGatewayURL))
 	mux.HandleFunc("/healthz", healthHandler)
 	mux.HandleFunc("/readyz", healthHandler)
-	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 
 	addr := ":8080"
 	log.Printf("listening on %s (ipfs api=%s gateway=%s otlp endpoint=%s)",

@@ -1,0 +1,10 @@
+# Subject PDF and local editor/OS files
+*.pdf
+.DS_Store
+.vscode/
+.idea/
+
+# Go build/test output
+backend/server
+*.test
+*.out

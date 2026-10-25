@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 K3D_CLUSTER_NAME := lgtm
-K3D_CONFIG := infra/k3d/cluster-config.yaml
+K3D_CONFIG := k8s/k3d-cluster.yaml
 
 GREEN  := \033[0;32m
 YELLOW := \033[0;33m
@@ -35,7 +35,7 @@ define run_spinner
 	exit $$status
 endef
 
-.PHONY: install uninstall up down status smoke-test deploy-kubo deploy-lgtm-stack deploy-backend
+.PHONY: install uninstall up down status smoke-test deploy-kubo deploy-lgtm-stack deploy-backend deploy-frontend
 
 install:
 	@printf "$(FIND) $(BOLD)Checking/installing host dependencies$(RESET)\n"
@@ -152,10 +152,11 @@ up: install
 	@$(MAKE) --no-print-directory deploy-kubo
 	@$(MAKE) --no-print-directory deploy-lgtm-stack
 	@$(MAKE) --no-print-directory deploy-backend
+	@$(MAKE) --no-print-directory deploy-frontend
 
 deploy-kubo:
 	@$(call run_spinner,Deploying Kubo (IPFS)...,\
-			kubectl apply -f infra/k8s/kubo.yaml && \
+			kubectl apply -f k8s/kubo.yaml && \
 			kubectl wait --for=condition=ready pod -l app=kubo --timeout=120s)
 	@printf "$(CHECK) $(BOLD)Kubo (IPFS) deployed and ready.$(RESET)\n"
 	@echo
@@ -164,45 +165,45 @@ deploy-lgtm-stack:
 	@$(call run_spinner,Deploying Loki...,\
 			helm upgrade --install loki grafana/loki \
 				--namespace default \
-				--values infra/helm/values-loki.yaml \
+				--values k8s/helm/values-loki.yaml \
 				--wait --timeout 180s)
 	@printf "$(CHECK) $(BOLD)Loki deployed and ready.$(RESET)\n"
 	@echo
 	@$(call run_spinner,Deploying Tempo...,\
 			helm upgrade --install tempo grafana-community/tempo \
 				--namespace default \
-				--values infra/helm/values-tempo.yaml \
+				--values k8s/helm/values-tempo.yaml \
 				--wait --timeout 180s)
 	@printf "$(CHECK) $(BOLD)Tempo deployed and ready.$(RESET)\n"
 	@echo
 	@$(call run_spinner,Deploying Mimir...,\
 			helm upgrade --install mimir grafana/mimir-distributed \
 				--namespace default \
-				--values infra/helm/values-mimir.yaml \
+				--values k8s/helm/values-mimir.yaml \
 				--wait --timeout 300s)
 	@printf "$(CHECK) $(BOLD)Mimir deployed and ready.$(RESET)\n"
 	@echo
 	@$(call run_spinner,Deploying OpenTelemetry Collector...,\
 			helm upgrade --install otel-collector open-telemetry/opentelemetry-collector \
 				--namespace default \
-				--values infra/helm/values-otel-collector.yaml \
+				--values k8s/helm/values-otel-collector.yaml \
 				--wait --timeout 120s)
 	@printf "$(CHECK) $(BOLD)OpenTelemetry Collector deployed and ready.$(RESET)\n"
 	@echo
 	@$(call run_spinner,Applying Grafana datasources and dashboards...,\
-			kubectl apply -n default -f infra/helm/datasources/datasources.yaml && \
+			kubectl apply -n default -f k8s/grafana-datasources.yaml && \
 			kubectl create configmap grafana-dashboard-metrics -n default \
-				--from-file=infra/helm/dashboards/dashboard-metrics.json \
+				--from-file=dashboards/dashboard-metrics.json \
 				--dry-run=client -o yaml | kubectl label -f - grafana_dashboard=1 --local -o yaml | kubectl apply -n default -f - && \
 			kubectl create configmap grafana-dashboard-traces -n default \
-				--from-file=infra/helm/dashboards/dashboard-traces.json \
+				--from-file=dashboards/dashboard-traces.json \
 				--dry-run=client -o yaml | kubectl label -f - grafana_dashboard=1 --local -o yaml | kubectl apply -n default -f -)
 	@printf "$(CHECK) $(BOLD)Grafana datasources and dashboards applied.$(RESET)\n"
 	@echo
 	@$(call run_spinner,Deploying Grafana...,\
 			helm upgrade --install grafana grafana/grafana \
 				--namespace default \
-				--values infra/helm/values-grafana.yaml \
+				--values k8s/helm/values-grafana.yaml \
 				--wait --timeout 180s)
 	@printf "$(CHECK) $(BOLD)Grafana deployed and ready.$(RESET)\n"
 	@echo
@@ -214,10 +215,24 @@ deploy-backend:
 	@printf "$(CHECK) $(BOLD)Backend image built and imported.$(RESET)\n"
 	@echo
 	@$(call run_spinner,Deploying backend...,\
-			kubectl apply -f infra/k8s/backend.yaml && \
+			kubectl apply -f k8s/backend.yaml && \
 			kubectl rollout restart deployment/backend && \
 			kubectl rollout status deployment/backend --timeout=60s)
 	@printf "$(CHECK) $(BOLD)Backend deployed and ready.$(RESET)\n"
+	@echo
+
+deploy-frontend:
+	@$(call run_spinner,Building frontend image...,\
+			docker build -t ft-lgtm-frontend:dev frontend/ && \
+			k3d image import ft-lgtm-frontend:dev -c $(K3D_CLUSTER_NAME))
+	@printf "$(CHECK) $(BOLD)Frontend image built and imported.$(RESET)\n"
+	@echo
+	@$(call run_spinner,Deploying frontend and lgtm.local ingress...,\
+			kubectl apply -f k8s/frontend.yaml -f k8s/ingress.yaml && \
+			kubectl rollout restart deployment/frontend && \
+			kubectl rollout status deployment/frontend --timeout=60s)
+	@printf "$(CHECK) $(BOLD)Frontend deployed and ready.$(RESET)\n"
+	@echo
 
 down:
 	@$(call run_spinner,Deleting k3d cluster '$(K3D_CLUSTER_NAME)'...,\
