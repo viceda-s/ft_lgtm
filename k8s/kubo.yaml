@@ -35,6 +35,7 @@ spec:
       labels:
         app: kubo
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: kubo
           image: ipfs/kubo:v0.35.0
@@ -64,6 +65,14 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 12
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+              ephemeral-storage: 64Mi
+            limits:
+              memory: 1Gi
+              ephemeral-storage: 512Mi
       volumes:
         - name: kubo-data
           persistentVolumeClaim:

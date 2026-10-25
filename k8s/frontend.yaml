@@ -12,6 +12,7 @@ spec:
       labels:
         app: frontend
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
       containers:
@@ -35,6 +36,7 @@ spec:
             requests:
               cpu: 10m
               memory: 16Mi
+              ephemeral-storage: 16Mi
             limits:
               memory: 64Mi
           securityContext:
