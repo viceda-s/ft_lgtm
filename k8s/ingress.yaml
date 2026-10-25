@@ -1,4 +1,3 @@
-# lgtm.local is one origin for the browser: the Playground's fetch("/api/execute") stays same-origin (no CORS), while ingress-nginx sends /api to the backend and everything else to the static frontend.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

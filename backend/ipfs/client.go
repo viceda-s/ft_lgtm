@@ -12,13 +12,11 @@ import (
 )
 
 
-// Client uploads execution artifacts to a Kubo IPFS node's RPC API.
 type Client struct {
     api *rpc.HttpApi
 }
 
 
-// NewClient constructs a Client pointed at the Kubo RPC API reachable at apiURL (e.g. "http://kubo:5001" in-cluster, "http://127.0.0.1:5001" in dev).
 func NewClient(apiURL string) (*Client, error) {
     api, err := rpc.NewURLApiWithClient(apiURL, &http.Client{})
     if err != nil {
@@ -28,23 +26,18 @@ func NewClient(apiURL string) (*Client, error) {
 }
 
 
-// addEvent mirrors one line of Kubo's newline-delimited JSON response to POST /api/v0/add. 
-// Kubo's add response has no field indicating node type; the wrapping directory (present because Upload always requests wrap-with-directory) is identified by having an empty Name, since Kubo wraps the upload in an unnamed files.FileEntry server-side.
 type addEvent struct {
     Name string
     Hash string
 }
 
 
-// Upload packages source, stdout, and stderr into a directory (main.go, stdout.txt, stderr.txt), uploads it to Kubo with wrap-with-directory and pin enabled, and returns the wrapping directory's CID.
-// The high-level Unixfs().Add() API has no wrap-with-directory option (it's a server-side-only flag), so this uses the low-level Request("add") builder directly.
 func (c *Client) Upload(ctx context.Context, source, stdout, stderr string) (string, error) {
         dirNode := files.NewMapDirectory(map[string]files.Node{
                 "main.go": files.NewBytesFile([]byte(source)),
                 "stdout.txt": files.NewBytesFile([]byte(stdout)),
                 "stderr.txt": files.NewBytesFile([]byte(stderr)),
         })
-        // wrapped := files.NewMapDirectory(map[string]files.Node{"": dirNode})
         reader := files.NewMultiFileReader(dirNode, false, false)
 
         resp, err := c.api.Request("add").
