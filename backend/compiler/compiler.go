@@ -3,13 +3,15 @@ package compiler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
 )
 
-// CompileError wraps TinyGo's stderr output when compilation fails.
 type CompileError struct {
 	Stderr string
 }
@@ -18,9 +20,15 @@ func (e *CompileError) Error() string {
 	return fmt.Sprintf("tinygo build failed: %s", e.Stderr)
 }
 
-// Compile writes source to a temporary file and builds it with TinyGo targeting wasipl (the current, supported WASI target - TinyGo's older "-target=wasi" flag was removed in favor of the standard Go wasipl GOOS/GOARCH pair).
-// It returns the compiled WASM module bytes, or a *CompileError wrapping TinyGo's stderr if compilation fails.
 func Compile(clx context.Context, source string) ([]byte, error) {
+	if f, err := parser.ParseFile(token.NewFileSet(), "main.go", source, parser.ImportsOnly); err == nil {
+		for _, imp := range f.Imports {
+			if imp.Path.Value == `"C"` {
+				return nil, &CompileError{Stderr: "main.go: cgo (import \"C\") is not allowed in the playground"}
+			}
+		}
+	}
+
 	tmpDir, err := os.MkdirTemp("", "lgtm-compile-*")
 	if err != nil {
 		return nil, fmt.Errorf("creating temp dir: %w", err)
@@ -34,13 +42,20 @@ func Compile(clx context.Context, source string) ([]byte, error) {
 
 	wasmPath := filepath.Join(tmpDir, "main.wasm")
 
-	cmd := exec.CommandContext(clx, "tinygo", "build", "-o", wasmPath, srcPath)
+	cmd := exec.CommandContext(clx, "tinygo", "build", "-o", "main.wasm", "main.go")
+	cmd.Dir = tmpDir
 	cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		if errors.Is(clx.Err(), context.DeadlineExceeded) {
+			return nil, &CompileError{Stderr: "compilation timed out"}
+		}
+		if stderr.Len() == 0 {
+			return nil, fmt.Errorf("running tinygo: %w", err)
+		}
 		return nil, &CompileError{Stderr: stderr.String()}
 	}
 
