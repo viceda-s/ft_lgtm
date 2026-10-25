@@ -20,15 +20,16 @@ import (
 )
 
 type fakeSharedCode struct {
+	file   string
 	cid    string
 	code   string
 	err    error
 	called bool
 }
 
-func (f *fakeSharedCode) SharedCode(ctx context.Context, id string) (string, string, error) {
+func (f *fakeSharedCode) SharedCode(ctx context.Context, id string) (string, string, string, error) {
 	f.called = true
-	return f.cid, f.code, f.err
+	return f.cid, f.file, f.code, f.err
 }
 
 func serveShare(reader SharedCodeReader, path string) *httptest.ResponseRecorder {
@@ -40,7 +41,7 @@ func serveShare(reader SharedCodeReader, path string) *httptest.ResponseRecorder
 }
 
 func TestShareHandler_KnownID_ReturnsCodeAndIPFSLink(t *testing.T) {
-	reader := &fakeSharedCode{cid: "QmCodeDir", code: "package main\n"}
+	reader := &fakeSharedCode{cid: "QmCodeDir", file: "main.rs", code: "fn main() {}\n"}
 
 	rec := serveShare(reader, "/api/share/abcdefgh")
 
@@ -51,7 +52,7 @@ func TestShareHandler_KnownID_ReturnsCodeAndIPFSLink(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if resp.Code != "package main\n" || resp.IPFSLink != "http://ipfs.lgtm.local/ipfs/QmCodeDir" {
+	if resp.Code != "fn main() {}\n" || resp.Language != "rust" || resp.IPFSLink != "http://ipfs.lgtm.local/ipfs/QmCodeDir" {
 		t.Fatalf("unexpected response %+v", resp)
 	}
 }

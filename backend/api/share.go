@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"ft_lgtm/backend/compiler"
 	"ft_lgtm/backend/ipfs"
 	"ft_lgtm/backend/telemetry"
 )
@@ -19,11 +20,12 @@ import (
 var shareIDPattern = regexp.MustCompile(`^[a-z2-7]{8}([a-z2-7]{8})?$`)
 
 type SharedCodeReader interface {
-	SharedCode(ctx context.Context, id string) (string, string, error)
+	SharedCode(ctx context.Context, id string) (string, string, string, error)
 }
 
 type ShareResponse struct {
 	Code     string `json:"code"`
+	Language string `json:"language"`
 	IPFSLink string `json:"ipfs_link"`
 }
 
@@ -56,7 +58,7 @@ func (h *shareHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	lookupCtx, cancel := context.WithTimeout(ctx, uploadTimeout)
 	defer cancel()
 
-	cid, code, err := h.reader.SharedCode(lookupCtx, id)
+	cid, file, code, err := h.reader.SharedCode(lookupCtx, id)
 	if errors.Is(err, ipfs.ErrShareNotFound) {
 		logger.InfoContext(ctx, "share link not found", "share.id", id)
 		http.Error(w, "share not found", http.StatusNotFound)
@@ -69,7 +71,15 @@ func (h *shareHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	span.SetAttributes(attribute.String("code.cid", cid))
+	language, ok := compiler.LanguageOf(file)
+	if !ok {
+		span.SetStatus(codes.Error, "shared code has an unknown language")
+		logger.ErrorContext(ctx, "shared code has an unknown language", "share.id", id, "code.cid", cid, "file", file)
+		http.Error(w, "could not load shared code", http.StatusInternalServerError)
+		return
+	}
+
+	span.SetAttributes(attribute.String("code.cid", cid), attribute.String("code.language", language))
 	logger.InfoContext(ctx, "share link opened", "share.id", id, "code.cid", cid)
-	writeJSON(w, http.StatusOK, ShareResponse{Code: code, IPFSLink: h.gatewayURL + "/ipfs/" + cid})
+	writeJSON(w, http.StatusOK, ShareResponse{Code: code, Language: language, IPFSLink: h.gatewayURL + "/ipfs/" + cid})
 }

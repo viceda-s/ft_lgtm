@@ -41,9 +41,9 @@ type addEvent struct {
 }
 
 
-func (c *Client) Upload(ctx context.Context, source, stdout, stderr string) (string, error) {
+func (c *Client) Upload(ctx context.Context, file, source, stdout, stderr string) (string, error) {
         dirNode := files.NewMapDirectory(map[string]files.Node{
-                "main.go": files.NewBytesFile([]byte(source)),
+                file: files.NewBytesFile([]byte(source)),
                 "stdout.txt": files.NewBytesFile([]byte(stdout)),
                 "stderr.txt": files.NewBytesFile([]byte(stderr)),
         })
@@ -127,26 +127,51 @@ func (c *Client) Share(ctx context.Context, cid string) (string, error) {
 }
 
 
-func (c *Client) SharedCode(ctx context.Context, id string) (string, string, error) {
+func (c *Client) SharedCode(ctx context.Context, id string) (string, string, string, error) {
     cid, err := c.sharedCID(ctx, id)
     if err != nil {
-        return "", "", err
+        return "", "", "", err
     }
 
-    resp, err := c.api.Request("cat", "/ipfs/"+cid+"/main.go").Send(ctx)
+    file, err := c.sourceFile(ctx, cid)
     if err != nil {
-        return "", "", fmt.Errorf("sending cat request: %w", err)
+        return "", "", "", err
+    }
+
+    resp, err := c.api.Request("cat", "/ipfs/"+cid+"/"+file).Send(ctx)
+    if err != nil {
+        return "", "", "", fmt.Errorf("sending cat request: %w", err)
     }
     defer resp.Close()
     if resp.Error != nil {
-        return "", "", fmt.Errorf("kubo cat failed: %w", resp.Error)
+        return "", "", "", fmt.Errorf("kubo cat failed: %w", resp.Error)
     }
 
     source, err := io.ReadAll(io.LimitReader(resp.Output, maxSharedSourceBytes))
     if err != nil {
-        return "", "", fmt.Errorf("reading shared source: %w", err)
+        return "", "", "", fmt.Errorf("reading shared source: %w", err)
     }
-    return cid, string(source), nil
+    return cid, file, string(source), nil
+}
+
+
+func (c *Client) sourceFile(ctx context.Context, cid string) (string, error) {
+    var listing struct {
+        Objects []struct {
+            Links []struct{ Name string }
+        }
+    }
+    if err := c.api.Request("ls", "/ipfs/"+cid).Option("resolve-type", false).Option("size", false).Exec(ctx, &listing); err != nil {
+        return "", fmt.Errorf("kubo ls failed: %w", err)
+    }
+    for _, object := range listing.Objects {
+        for _, link := range object.Links {
+            if strings.HasPrefix(link.Name, "main.") {
+                return link.Name, nil
+            }
+        }
+    }
+    return "", fmt.Errorf("shared directory %s has no main source file", cid)
 }
 
 

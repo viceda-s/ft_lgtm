@@ -94,6 +94,7 @@ func TestHandler_MalformedJSON_Returns400(t *testing.T) {
 }
 
 type fakeUploader struct {
+	file       string
 	cid        string
 	err        error
 	shareID    string
@@ -102,7 +103,8 @@ type fakeUploader struct {
 	provideErr error
 }
 
-func (f *fakeUploader) Upload(ctx context.Context, source, stdout, stderr string) (string, error) {
+func (f *fakeUploader) Upload(ctx context.Context, file, source, stdout, stderr string) (string, error) {
+	f.file = file
 	return f.cid, f.err
 }
 

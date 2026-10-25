@@ -56,7 +56,7 @@ func TestUpload_ValidContent_ReturnsCIDAndRoundTrips(t *testing.T) {
     stdout := "hello\n"
     stderr := ""
 
-    cid, err := client.Upload(context.Background(), source, stdout, stderr)
+    cid, err := client.Upload(context.Background(), "main.go", source, stdout, stderr)
     if err != nil {
         t.Fatalf("Upload returned error: %v", err)
     }
@@ -79,7 +79,7 @@ func TestUpload_ValidContent_ReturnsCIDAndRoundTrips(t *testing.T) {
 func TestUpload_EmptyOutput_UploadsWithoutError(t *testing.T) {
     client, gatewayURL := testClient(t)
 
-    cid, err := client.Upload(context.Background(), "package main\n", "", "")
+    cid, err := client.Upload(context.Background(), "main.go", "package main\n", "", "")
     if err != nil {
         t.Fatalf("Upload returned error for empty stdout/stderr: %v", err)
     }
@@ -99,7 +99,7 @@ func TestUpload_CancelledContext_ReturnsError(t *testing.T) {
     ctx, cancel := context.WithCancel(context.Background())
     cancel()
 
-    _, err := client.Upload(ctx, "package main\n", "out", "")
+    _, err := client.Upload(ctx, "main.go", "package main\n", "out", "")
     if err == nil {
         t.Fatalf("expected error for an already-cancelled context, got nil")
     }
@@ -115,7 +115,7 @@ func TestUpload_UnreachableAPI_ReturnsError(t *testing.T) {
     ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
     defer cancel()
 
-    _, err = client.Upload(ctx, "package main\n", "out", "")
+    _, err = client.Upload(ctx, "main.go", "package main\n", "out", "")
     if err == nil {
         t.Fatalf("expected error for unreachable Kubo API, got nil")
     }
@@ -146,7 +146,7 @@ func TestUpload_AddResponse_ReturnsWrapperDirectoryCID(t *testing.T) {
             if err != nil {
                 t.Fatalf("NewClient failed: %v", err)
             }
-            cid, err := client.Upload(context.Background(), "package main\n", "out", "")
+            cid, err := client.Upload(context.Background(), "main.go", "package main\n", "out", "")
             if tc.wantCID == "" {
                 if err == nil {
                     t.Fatalf("expected an error, got CID %q", cid)
@@ -188,6 +188,14 @@ func fakeKubo(t *testing.T, mfs map[string]string, sources map[string]string) *C
                 return
             }
             _, _ = io.WriteString(w, `{"Hash":"`+cid+`","Type":"directory"}`)
+        case "/api/v0/ls":
+            var links []string
+            for path := range sources {
+                if name, ok := strings.CutPrefix(path, args[0]+"/"); ok {
+                    links = append(links, `{"Name":"`+name+`"}`)
+                }
+            }
+            _, _ = io.WriteString(w, `{"Objects":[{"Hash":"`+strings.TrimPrefix(args[0], "/ipfs/")+`","Links":[`+strings.Join(links, ",")+`]}]}`)
         case "/api/v0/cat":
             source, ok := sources[args[0]]
             if !ok {
@@ -258,15 +266,15 @@ func TestShare_ShortIDTakenByOtherCID_UsesLongerID(t *testing.T) {
 
 func TestSharedCode_KnownID_ReturnsCIDAndSource(t *testing.T) {
     mfs := map[string]string{"/shares/abcdefgh": "QmCodeDir"}
-    sources := map[string]string{"/ipfs/QmCodeDir/main.go": "package main\n"}
+    sources := map[string]string{"/ipfs/QmCodeDir/main.rs": "fn main() {}\n", "/ipfs/QmCodeDir/stdout.txt": "out"}
     client := fakeKubo(t, mfs, sources)
 
-    cid, source, err := client.SharedCode(context.Background(), "abcdefgh")
+    cid, file, source, err := client.SharedCode(context.Background(), "abcdefgh")
     if err != nil {
         t.Fatalf("SharedCode failed: %v", err)
     }
-    if cid != "QmCodeDir" || source != "package main\n" {
-        t.Fatalf("expected QmCodeDir and its main.go, got %q and %q", cid, source)
+    if cid != "QmCodeDir" || file != "main.rs" || source != "fn main() {}\n" {
+        t.Fatalf("expected QmCodeDir and its main.rs, got %q, %q and %q", cid, file, source)
     }
 }
 
@@ -274,7 +282,7 @@ func TestSharedCode_KnownID_ReturnsCIDAndSource(t *testing.T) {
 func TestSharedCode_UnknownID_ReturnsErrShareNotFound(t *testing.T) {
     client := fakeKubo(t, map[string]string{}, nil)
 
-    _, _, err := client.SharedCode(context.Background(), "abcdefgh")
+    _, _, _, err := client.SharedCode(context.Background(), "abcdefgh")
     if !errors.Is(err, ErrShareNotFound) {
         t.Fatalf("expected ErrShareNotFound, got %v", err)
     }

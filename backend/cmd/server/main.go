@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"ft_lgtm/backend/api"
+	"ft_lgtm/backend/compiler"
 	"ft_lgtm/backend/executor"
 	"ft_lgtm/backend/ipfs"
 	"ft_lgtm/backend/telemetry"
@@ -30,6 +31,8 @@ func getEnvOrDefault(key, def string) string {
 }
 
 func main() {
+	compiler.RunSandboxIfRequested()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

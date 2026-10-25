@@ -2,8 +2,8 @@ package executor
 
 import (
     "context"
-    "sync"
     "runtime"
+    "sync"
     "testing"
     "time"
 
@@ -13,7 +13,7 @@ import (
 
 func compileFixture(t *testing.T, source string) []byte {
     t.Helper()
-    wasmBytes, err := compiler.Compile(context.Background(), source)
+    wasmBytes, err := compiler.Compile(context.Background(), "go", source)
     if err != nil {
         t.Fatalf("failed to compile test fixture: %v", err)
     }

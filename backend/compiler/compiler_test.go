@@ -19,7 +19,7 @@ func main() {
 	println("Hello")
 }
 `
-	wasmBytes, err := Compile(context.Background(), source)
+	wasmBytes, err := Compile(context.Background(), "go", source)
 	if err != nil {
 		t.Fatalf("Compile returned error for valid program: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestCompile_InvalidProgram_ReturnsCompileError(t *testing.T) {
 func main() {
 	This is not valid Go syntax
 }`
-	_, err:= Compile(context.Background(), source)
+	_, err:= Compile(context.Background(), "go", source)
 	if err == nil {
 		t.Fatal("expected Compile to return an error for invalid syntax, got nil")
 	}
@@ -57,7 +57,7 @@ func TestCompile_InvalidProgram_ErrorReferencesMainGoNotTempDir(t *testing.T) {
 func main() {
 	This is not valid Go syntax
 }`
-	_, err := Compile(context.Background(), source)
+	_, err := Compile(context.Background(), "go", source)
 
 	var compileErr *CompileError
 	if !errors.As(err, &compileErr) {
@@ -75,7 +75,7 @@ func TestCompile_DeadlineExceeded_ReturnsTimeoutCompileError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 
-	_, err := Compile(ctx, "package main\n\nfunc main() {}\n")
+	_, err := Compile(ctx, "go", "package main\n\nfunc main() {}\n")
 
 	var compileErr *CompileError
 	if !errors.As(err, &compileErr) {
@@ -88,7 +88,7 @@ func TestCompile_DeadlineExceeded_ReturnsTimeoutCompileError(t *testing.T) {
 
 func TestCompile_Cgo_RejectedBeforeIncludingHostFiles(t *testing.T) {
 	source := "package main\n\n// #include \"/etc/hostname\"\nimport \"C\"\n\nfunc main() {}\n"
-	_, err := Compile(context.Background(), source)
+	_, err := Compile(context.Background(), "go", source)
 
 	var compileErr *CompileError
 	if !errors.As(err, &compileErr) {
@@ -103,7 +103,7 @@ func TestCompile_RecordsCompilerCPUAndMemoryOnSpan(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	ctx, span := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder)).Tracer("test").Start(context.Background(), "compile")
 
-	if _, err := Compile(ctx, "package main\n\nfunc main() {}\n"); err != nil {
+	if _, err := Compile(ctx, "go", "package main\n\nfunc main() {}\n"); err != nil {
 		t.Fatalf("Compile returned error for valid program: %v", err)
 	}
 	span.End()

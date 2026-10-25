@@ -63,20 +63,23 @@ func instruments() (metric.Int64Counter, error) {
 			return
 		}
 		for _, outcome := range executionOutcomes {
-			executionsCounterInstrument.Add(context.Background(), 0, metric.WithAttributeSet(attribute.NewSet(attribute.String("outcome", outcome))))
+			for _, language := range compiler.Languages() {
+				executionsCounterInstrument.Add(context.Background(), 0, executionAttributes(language, outcome))
+			}
 		}
 	})
 	return executionsCounterInstrument, instrumentsErr
 }
 
 type Uploader interface {
-	Upload(ctx context.Context, source, stdout, stderr string) (string, error)
+	Upload(ctx context.Context, file, source, stdout, stderr string) (string, error)
 	Share(ctx context.Context, cid string) (string, error)
 	Provide(ctx context.Context, cid string) error
 }
 
 type ExecuteRequest struct {
-	Code string `json:"code"`
+	Code     string `json:"code"`
+	Language string `json:"language"`
 }
 
 type ExecuteResponse struct {
@@ -138,16 +141,24 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
+	if req.Language == "" {
+		req.Language = "go"
+	}
+	sourceFile, ok := compiler.SourceFile(req.Language)
+	if !ok {
+		http.Error(w, "unsupported language", http.StatusBadRequest)
+		return
+	}
 
 	ctx := r.Context()
 	span := trace.SpanFromContext(ctx)
 
 	hash := sha256.Sum256([]byte(req.Code))
 	codeHash := hex.EncodeToString(hash[:])
-	span.SetAttributes(attribute.String("code.hash", codeHash))
+	span.SetAttributes(attribute.String("code.hash", codeHash), attribute.String("code.language", req.Language))
 
 	outcome := "success"
-	defer func() { recordExecution(ctx, outcome) }()
+	defer func() { recordExecution(ctx, req.Language, outcome) }()
 
 	logger := telemetry.Logger(instrumentationName)
 
@@ -165,7 +176,7 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stageStart := time.Now()
-	wasmBytes, err := h.compileWithSpan(ctx, req.Code)
+	wasmBytes, err := h.compileWithSpan(ctx, req.Language, req.Code)
 	resp.Timings.Compile = time.Since(stageStart).Milliseconds()
 	if err != nil {
 		var compileErr *compiler.CompileError
@@ -219,7 +230,7 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stageStart = time.Now()
-	cid, uploadErr := h.uploadWithSpan(ctx, req.Code, result.Stdout, result.Stderr)
+	cid, uploadErr := h.uploadWithSpan(ctx, sourceFile, req.Code, result.Stdout, result.Stderr)
 	resp.Timings.IPFSUpload = time.Since(stageStart).Milliseconds()
 	if uploadErr != nil {
 		logger.ErrorContext(ctx, "ipfs upload failed", "code.hash", codeHash, "error", uploadErr)
@@ -237,7 +248,11 @@ func (h *executeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func recordExecution(ctx context.Context, outcome string) {
+func executionAttributes(language, outcome string) metric.MeasurementOption {
+	return metric.WithAttributeSet(attribute.NewSet(attribute.String("language", language), attribute.String("outcome", outcome)))
+}
+
+func recordExecution(ctx context.Context, language, outcome string) {
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String("execution.outcome", outcome))
 
 	counter, err := instruments()
@@ -245,7 +260,7 @@ func recordExecution(ctx context.Context, outcome string) {
 		telemetry.Logger(instrumentationName).ErrorContext(ctx, "constructing execution metrics", "error", err)
 		return
 	}
-	counter.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("outcome", outcome))))
+	counter.Add(ctx, 1, executionAttributes(language, outcome))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -254,14 +269,14 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func (h *executeHandler) compileWithSpan(ctx context.Context, source string) ([]byte, error) {
+func (h *executeHandler) compileWithSpan(ctx context.Context, language, source string) ([]byte, error) {
 	ctx, span := tracer().Start(ctx, "compile")
 	defer span.End()
 
 	compileCtx, cancel := context.WithTimeout(ctx, compileTimeout)
 	defer cancel()
 
-	wasmBytes, err := compiler.Compile(compileCtx, source)
+	wasmBytes, err := compiler.Compile(compileCtx, language, source)
 	if err != nil {
 		span.SetStatus(codes.Error, "compile failed")
 		return nil, err
@@ -297,14 +312,14 @@ func (h *executeHandler) runWithSpan(ctx context.Context, wasmBytes []byte) (exe
 	return result, nil
 }
 
-func (h *executeHandler) uploadWithSpan(ctx context.Context, source, stdout, stderr string) (string, error) {
+func (h *executeHandler) uploadWithSpan(ctx context.Context, file, source, stdout, stderr string) (string, error) {
 	ctx, span := tracer().Start(ctx, "ipfs_upload")
 	defer span.End()
 
 	uploadCtx, cancel := context.WithTimeout(ctx, uploadTimeout)
 	defer cancel()
 
-	cid, err := h.uploader.Upload(uploadCtx, source, stdout, stderr)
+	cid, err := h.uploader.Upload(uploadCtx, file, source, stdout, stderr)
 	if err != nil {
 		span.SetStatus(codes.Error, "ipfs upload failed")
 		return "", err
