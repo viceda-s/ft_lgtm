@@ -3,12 +3,18 @@ mode: deployment
 image:
   repository: otel/opentelemetry-collector-contrib
 
+presets:
+  clusterMetrics:
+    enabled: true
+
 config:
   receivers:
     otlp:
       protocols:
         grpc:
           endpoint: 0.0.0.0:4317
+    k8s_cluster:
+      allocatable_types_to_report: [cpu, memory]
 
   exporters:
     otlp_http/tempo:
@@ -19,8 +25,10 @@ config:
       endpoint: http://loki:3100/otlp
       tls:
         insecure: true
-    prometheusremotewrite/mimir:
+    prometheus_remote_write/mimir:
       endpoint: http://mimir-gateway/api/v1/push
+      resource_constant_labels:
+        included: ["k8s.*"]
       tls:
         insecure: true
 
@@ -33,7 +41,7 @@ config:
       metrics:
         receivers: [otlp]
         processors: [batch]
-        exporters: [prometheusremotewrite/mimir]
+        exporters: [prometheus_remote_write/mimir]
       logs:
         receivers: [otlp]
         processors: [batch]
