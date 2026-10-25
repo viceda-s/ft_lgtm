@@ -76,8 +76,15 @@ const ipfsLinkEl = document.getElementById("ipfs-link");
 const runMetaEl = document.getElementById("run-meta");
 const runTimingsEl = document.getElementById("run-timings");
 const traceLinkEl = document.getElementById("trace-link");
+const shareButton = document.getElementById("share-button");
+const shareBoxEl = document.getElementById("share-box");
+const shareUrlEl = document.getElementById("share-url");
+const shareHintEl = document.getElementById("share-hint");
+
+const SHARE_ID_PATTERN = /^[a-z2-7]{8}(?:[a-z2-7]{8})?$/;
 
 let editor;
+let shareId = null;
 
 function setLoading(isLoading) {
   runButton.disabled = isLoading;
@@ -92,6 +99,9 @@ function clearResult() {
   ipfsLinkEl.removeAttribute("href");
   runMetaEl.hidden = true;
   traceLinkEl.hidden = true;
+  shareId = null;
+  shareButton.hidden = true;
+  shareBoxEl.hidden = true;
 }
 
 function showOutput(text, isError) {
@@ -158,6 +168,51 @@ function renderResult(result) {
   }
   showIpfsLink(result.ipfs_link);
   showRunMeta(result.timings_ms, result.trace_id);
+  if (typeof result.share_id === "string" && SHARE_ID_PATTERN.test(result.share_id)) {
+    shareId = result.share_id;
+    shareButton.hidden = false;
+  }
+}
+
+async function shareCode() {
+  shareUrlEl.value = `${location.origin}/s/${shareId}`;
+  shareBoxEl.hidden = false;
+  shareUrlEl.focus();
+  shareUrlEl.select();
+  try {
+    await navigator.clipboard.writeText(shareUrlEl.value);
+    shareHintEl.textContent = "Link copied ✓";
+  } catch {
+    shareHintEl.textContent = "Press Ctrl+C (⌘C) to copy";
+  }
+}
+
+async function loadSharedCode() {
+  if (!location.pathname.startsWith("/s/")) {
+    return null;
+  }
+  const id = location.pathname.slice("/s/".length);
+  if (!SHARE_ID_PATTERN.test(id)) {
+    showOutput("This share link is not valid.", true);
+    return null;
+  }
+  try {
+    const response = await fetch(`/api/share/${id}`);
+    if (!response.ok) {
+      showOutput(response.status === 404 ? "This share link does not exist." : `Could not load the shared code (HTTP ${response.status}).`, true);
+      return null;
+    }
+    const shared = await response.json();
+    if (typeof shared.code !== "string") {
+      return null;
+    }
+    showOutput("Shared code loaded. Press Run to execute it.", false);
+    showIpfsLink(shared.ipfs_link);
+    return shared.code;
+  } catch {
+    showOutput("Unable to contact the backend to load the shared code.", true);
+    return null;
+  }
 }
 
 async function runCode() {
@@ -187,14 +242,19 @@ async function runCode() {
 }
 
 runButton.addEventListener("click", runCode);
+shareButton.addEventListener("click", shareCode);
+
+const sharedCode = loadSharedCode();
 
 require.config({ paths: { vs: "/vendor/monaco/min/vs" } });
 require(["vs/editor/editor.main"], () => {
-  editor = monaco.editor.create(document.getElementById("editor"), {
-    value: EXAMPLE_CODE,
-    language: "go",
-    theme: "vs-dark",
-    automaticLayout: true,
-    minimap: { enabled: false },
+  sharedCode.then((code) => {
+    editor = monaco.editor.create(document.getElementById("editor"), {
+      value: code ?? EXAMPLE_CODE,
+      language: "go",
+      theme: "vs-dark",
+      automaticLayout: true,
+      minimap: { enabled: false },
+    });
   });
 });

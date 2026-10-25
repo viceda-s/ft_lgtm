@@ -25,7 +25,14 @@
     <section class="panel">
       <div class="panel-header">
         <h2>Output</h2>
-        <a id="ipfs-link" class="ipfs-link" href="#" target="_blank" rel="noopener" hidden>IPFS ↗</a>
+        <div class="panel-actions">
+          <button id="share-button" class="share-button" type="button" hidden>Share 🔗</button>
+          <a id="ipfs-link" class="ipfs-link" href="#" target="_blank" rel="noopener" hidden>IPFS ↗</a>
+        </div>
+      </div>
+      <div id="share-box" class="share-box" hidden>
+        <input id="share-url" class="share-url" type="text" readonly aria-label="Share link" />
+        <span id="share-hint" class="share-hint" aria-live="polite"></span>
       </div>
       <pre id="output" class="output" aria-live="polite"></pre>
       <div id="run-meta" class="run-meta" hidden>
