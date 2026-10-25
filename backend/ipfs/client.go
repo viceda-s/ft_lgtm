@@ -2,10 +2,14 @@ package ipfs
 
 import (
     "context"
+    "crypto/sha256"
+    "encoding/base32"
     "encoding/json"
+    "errors"
     "fmt"
     "io"
     "net/http"
+    "strings"
 
     "github.com/ipfs/boxo/files"
     rpc "github.com/ipfs/kubo/client/rpc"
@@ -80,4 +84,74 @@ func (c *Client) Upload(ctx context.Context, source, stdout, stderr string) (str
             return "", fmt.Errorf("kubo add response had no wrapping directory entry") 
         }
         return wrapperCID, nil
+}
+
+
+var ErrShareNotFound = errors.New("share not found")
+
+const sharesDir = "/shares"
+
+const maxSharedSourceBytes = 64 * 1024
+
+
+func shareID(cid string, length int) string {
+    sum := sha256.Sum256([]byte(cid))
+    encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
+    return strings.ToLower(encoded[:length])
+}
+
+
+func (c *Client) Share(ctx context.Context, cid string) (string, error) {
+    for _, length := range []int{8, 16} {
+        id := shareID(cid, length)
+        cpErr := c.api.Request("files/cp", "/ipfs/"+cid, sharesDir+"/"+id).
+            Option("parents", true).
+            Exec(ctx, nil)
+        if cpErr == nil {
+            return id, nil
+        }
+        existing, err := c.sharedCID(ctx, id)
+        if err != nil {
+            return "", fmt.Errorf("creating share link: %w", cpErr)
+        }
+        if existing == cid {
+            return id, nil
+        }
+    }
+    return "", fmt.Errorf("every share id for %s is taken by other content", cid)
+}
+
+
+func (c *Client) SharedCode(ctx context.Context, id string) (string, string, error) {
+    cid, err := c.sharedCID(ctx, id)
+    if err != nil {
+        return "", "", err
+    }
+
+    resp, err := c.api.Request("cat", "/ipfs/"+cid+"/main.go").Send(ctx)
+    if err != nil {
+        return "", "", fmt.Errorf("sending cat request: %w", err)
+    }
+    defer resp.Close()
+    if resp.Error != nil {
+        return "", "", fmt.Errorf("kubo cat failed: %w", resp.Error)
+    }
+
+    source, err := io.ReadAll(io.LimitReader(resp.Output, maxSharedSourceBytes))
+    if err != nil {
+        return "", "", fmt.Errorf("reading shared source: %w", err)
+    }
+    return cid, string(source), nil
+}
+
+
+func (c *Client) sharedCID(ctx context.Context, id string) (string, error) {
+    var stat struct{ Hash string }
+    if err := c.api.Request("files/stat", sharesDir+"/"+id).Exec(ctx, &stat); err != nil {
+        if strings.Contains(err.Error(), "file does not exist") {
+            return "", ErrShareNotFound
+        }
+        return "", fmt.Errorf("kubo files stat failed: %w", err)
+    }
+    return stat.Hash, nil
 }
