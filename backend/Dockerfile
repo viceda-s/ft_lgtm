@@ -32,7 +32,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=1 go build -o /out/server ./cmd/server
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=1 go build -o /out/server ./cmd/server
 
 FROM debian:bookworm-slim
 LABEL ft-lgtm=backend
