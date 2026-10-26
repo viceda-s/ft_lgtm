@@ -223,3 +223,49 @@ func main() {
 		t.Fatalf("expected the busy loop to use more thread CPU time, got %v vs %v", busy.CPUTime, idle.CPUTime)
 	}
 }
+
+func TestExecutor_Run_SleepPastDeadline_TimesOutWithoutWaiting(t *testing.T) {
+	wasmBytes := compileFixture(t, `package main
+
+import "time"
+
+func main() {
+	time.Sleep(10 * time.Second)
+	println("woke up")
+}
+`)
+	exec := NewExecutor()
+	start := time.Now()
+	result, err := exec.Run(wasmBytes, 1*time.Second, 10*1024)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Run returned infrastructure error: %v", err)
+	}
+	if !result.TimedOut || result.ExitError != nil {
+		t.Fatalf("expected TimedOut=true and no exit error, got TimedOut=%v ExitError=%v", result.TimedOut, result.ExitError)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("expected the sleep to be cut at the 1s deadline, took %v", elapsed)
+	}
+}
+
+func TestExecutor_Run_ShortSleep_StillRuns(t *testing.T) {
+	wasmBytes := compileFixture(t, `package main
+
+import "time"
+
+func main() {
+	time.Sleep(50 * time.Millisecond)
+	println("woke up")
+}
+`)
+	exec := NewExecutor()
+	result, err := exec.Run(wasmBytes, 5*time.Second, 10*1024)
+	if err != nil {
+		t.Fatalf("Run returned infrastructure error: %v", err)
+	}
+	if result.TimedOut || result.ExitError != nil || result.Stdout+result.Stderr != "woke up\n" {
+		t.Fatalf("expected the short sleep to finish normally, got %+v", result)
+	}
+}

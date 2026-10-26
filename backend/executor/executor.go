@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"runtime"
+	"slices"
 	"time"
 	"unicode/utf16"
 
@@ -21,6 +23,15 @@ const (
 	wasiErrnoSuccess = 0
 	wasiErrnoBadf    = 8
 	wasiErrnoFault   = 21
+	wasiErrnoInval   = 28
+)
+
+const (
+	wasiSubscriptionSize = 48
+	wasiEventSize        = 32
+	wasiEventtypeClock   = 0
+	wasiClockRealtime    = 0
+	wasiSubclockAbstime  = 1
 )
 
 type Result struct {
@@ -71,6 +82,7 @@ func (e *Executor) Close() {
 func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes int) (Result, error) {
 	store := wasmtime.NewStore(e.engine)
 	defer store.Close()
+	sleeps := &sleepLimit{deadline: time.Now().Add(timeout)}
 	store.SetEpochDeadline(uint64(timeout/epochTick) + 1)
 	// tables live in host memory too, so they are capped alongside the 10 MiB of linear memory
 	store.Limiter(int64(10*1024*1024), maxTableElements, -1, 1, 1)
@@ -80,6 +92,7 @@ func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes i
 
 	wasiConfig := wasmtime.NewWasiConfig()
 	wasiConfig.SetArgv([]string{"prog"})
+	sleeps.wasiStart = time.Now()
 	store.SetWasi(wasiConfig)
 
 	output := &outputCapture{limit: maxOutputBytes, remaining: maxOutputBytes}
@@ -92,6 +105,9 @@ func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes i
 	linker.AllowShadowing(true)
 	if err := linker.FuncWrap("wasi_snapshot_preview1", "fd_write", output.fdWrite); err != nil {
 		return Result{}, fmt.Errorf("overriding WASI fd_write: %w", err)
+	}
+	if err := linker.FuncWrap("wasi_snapshot_preview1", "poll_oneoff", sleeps.pollOneoff); err != nil {
+		return Result{}, fmt.Errorf("overriding WASI poll_oneoff: %w", err)
 	}
 	if err := linker.FuncWrap("env", "console.log", output.consoleLog); err != nil {
 		return Result{}, fmt.Errorf("defining env.console.log: %w", err)
@@ -137,7 +153,89 @@ func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes i
 		result.MemoryBytes = uint64(export.Memory().DataSize(store))
 	}
 	result.TimedOut, result.ExitError = classifyCallError(callErr, output.exceeded)
+	if sleeps.exceeded {
+		result.TimedOut, result.ExitError = true, nil
+	}
 	return result, nil
+}
+
+// sleepLimit replaces WASI's poll_oneoff: a sleep blocks on the host, where epoch interruption cannot stop it,
+// so a sleep that would end past the deadline stops the program at once instead of holding a run slot
+type sleepLimit struct {
+	deadline  time.Time
+	wasiStart time.Time
+	exceeded  bool
+}
+
+func (s *sleepLimit) pollOneoff(caller *wasmtime.Caller, in, out, nsubscriptions, nevents int32) (int32, *wasmtime.Trap) {
+	if nsubscriptions <= 0 {
+		return wasiErrnoInval, nil
+	}
+	memExport := caller.GetExport("memory")
+	if memExport == nil || memExport.Memory() == nil {
+		return wasiErrnoFault, nil
+	}
+	mem := memExport.Memory().UnsafeData(caller)
+	if int(nsubscriptions) > len(mem)/wasiSubscriptionSize {
+		return wasiErrnoFault, nil
+	}
+	subscriptions, ok := memSlice(mem, uint32(in), uint32(nsubscriptions)*wasiSubscriptionSize)
+	if !ok {
+		return wasiErrnoFault, nil
+	}
+	events, ok := memSlice(mem, uint32(out), uint32(nsubscriptions)*wasiEventSize)
+	if !ok {
+		return wasiErrnoFault, nil
+	}
+	count, ok := memSlice(mem, uint32(nevents), 4)
+	if !ok {
+		return wasiErrnoFault, nil
+	}
+
+	// file descriptors are ready at once: stdin is empty and stdout/stderr always accept writes
+	now := time.Now()
+	readyAt := make([]time.Time, nsubscriptions)
+	for i := range readyAt {
+		readyAt[i] = now
+		if sub := subscriptions[i*wasiSubscriptionSize:]; sub[8] == wasiEventtypeClock {
+			readyAt[i] = s.clockDeadline(sub, now)
+		}
+	}
+	wake := slices.MinFunc(readyAt, time.Time.Compare)
+	if wake.After(s.deadline) {
+		s.exceeded = true
+		return 0, wasmtime.NewTrap("time limit exceeded while sleeping")
+	}
+	time.Sleep(time.Until(wake))
+
+	n := 0
+	for i, at := range readyAt {
+		if at.After(wake) {
+			continue
+		}
+		sub, event := subscriptions[i*wasiSubscriptionSize:], events[n*wasiEventSize:(n+1)*wasiEventSize]
+		clear(event)
+		copy(event[0:8], sub[0:8])
+		event[10] = sub[8]
+		if sub[8] != wasiEventtypeClock && binary.LittleEndian.Uint32(sub[16:20]) > 2 {
+			binary.LittleEndian.PutUint16(event[8:10], wasiErrnoBadf)
+		}
+		n++
+	}
+	binary.LittleEndian.PutUint32(count, uint32(n))
+	return wasiErrnoSuccess, nil
+}
+
+func (s *sleepLimit) clockDeadline(sub []byte, now time.Time) time.Time {
+	timeout := time.Duration(min(binary.LittleEndian.Uint64(sub[24:32]), math.MaxInt64))
+	if binary.LittleEndian.Uint16(sub[40:42])&wasiSubclockAbstime == 0 {
+		return now.Add(timeout)
+	}
+	if binary.LittleEndian.Uint32(sub[16:20]) == wasiClockRealtime {
+		return time.Unix(0, int64(timeout))
+	}
+	// wasmtime's monotonic clock counts from when the WASI context was built
+	return s.wasiStart.Add(timeout)
 }
 
 func classifyCallError(callErr error, outputExceeded bool) (timedOut bool, exitErr error) {

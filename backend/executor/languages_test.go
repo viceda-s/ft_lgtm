@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -73,10 +74,39 @@ func TestExecutor_Run_AssemblyScriptConsole_RespectsOutputLimit(t *testing.T) {
 	}
 }
 
+func TestExecutor_Run_CAbsoluteSleep_RespectsDeadline(t *testing.T) {
+	sleep := func(clock string, seconds, nanoseconds int) string {
+		return fmt.Sprintf("#include <stdio.h>\n#include <time.h>\nint main(void) {\n"+
+			"  struct timespec t;\n  clock_gettime(%s, &t);\n  t.tv_sec += %d; t.tv_nsec += %d;\n"+
+			"  if (t.tv_nsec >= 1000000000) { t.tv_sec++; t.tv_nsec -= 1000000000; }\n"+
+			"  clock_nanosleep(%s, TIMER_ABSTIME, &t, NULL);\n  puts(\"woke up\");\n  return 0;\n}\n", clock, seconds, nanoseconds, clock)
+	}
+	for _, clock := range []string{"CLOCK_MONOTONIC", "CLOCK_REALTIME"} {
+		t.Run(clock, func(t *testing.T) {
+			if result := runProgram(t, "c", sleep(clock, 0, 50_000_000)); result.TimedOut || result.Stdout != "woke up\n" {
+				t.Fatalf("expected a 50ms absolute sleep to finish, got %+v", result)
+			}
+			start := time.Now()
+			if result := runProgram(t, "c", sleep(clock, 30, 0)); !result.TimedOut || time.Since(start) > 5*time.Second {
+				t.Fatalf("expected a 30s absolute sleep to time out at once, got %+v after %v", result, time.Since(start))
+			}
+		})
+	}
+}
+
 func TestExecutor_Run_CTableGrowth_IsCapped(t *testing.T) {
 	result := runProgram(t, "c", "#include <stdio.h>\ntypedef void (*__funcref funcref_t)(void);\nstatic funcref_t table[0];\n"+
 		"int main(void) {\n  printf(\"%d\\n\", __builtin_wasm_table_grow(table, __builtin_wasm_ref_null_func(), 50000000));\n  return 0;\n}\n")
 	if result.Stdout == "0\n" {
 		t.Fatalf("expected growing a table to 50M elements to fail, got %+v", result)
+	}
+}
+
+func TestExecutor_Run_CPollWithOverflowingCount_ReturnsFault(t *testing.T) {
+	result := runProgram(t, "c", "#include <stdio.h>\n#include <wasi/api.h>\nint main(void) {\n"+
+		"  __wasi_subscription_t sub = {0};\n  __wasi_event_t event;\n  __wasi_size_t n;\n"+
+		"  printf(\"%d\\n\", __wasi_poll_oneoff(&sub, &event, 0x10000000, &n));\n  return 0;\n}\n")
+	if result.ExitError != nil || result.Stdout != "21\n" {
+		t.Fatalf("expected EFAULT (21) for a subscription count that overflows, got %+v", result)
 	}
 }
