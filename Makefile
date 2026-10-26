@@ -1,6 +1,10 @@
 SHELL := /bin/bash
 K3D_CLUSTER_NAME := lgtm
 K3D_CONFIG := k8s/k3d-cluster.yaml
+# pinned so a fresh VM gets the versions this project was tested with
+K3D_VERSION := v5.9.0
+HELM_VERSION := v3.22.1
+KUBECTL_VERSION := v1.35.5
 PRUNE_IMAGES = docker image prune -f --filter label=ft-lgtm >/dev/null; \
 	for node in $$(docker ps --filter label=k3d.cluster=$(K3D_CLUSTER_NAME) --format '{{.Names}}' | grep -E -- '-(server|agent)-'); do \
 		docker exec $$node crictl rmi --prune >/dev/null 2>&1; \
@@ -66,7 +70,7 @@ install:
 	@if ! command -v kubectl >/dev/null 2>&1; then \
 		sudo -v || exit 1; \
 		$(call run_spinner,Installing kubectl...,\
-			curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/$$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$$(dpkg --print-architecture)/kubectl" && \
+			curl -fsSL -o /tmp/kubectl "https://dl.k8s.io/release/$(KUBECTL_VERSION)/bin/linux/$$(dpkg --print-architecture)/kubectl" && \
 			sudo install -o root -g root -m 0755 /tmp/kubectl /usr/local/bin/kubectl && \
 			rm -f /tmp/kubectl) && \
 		printf "$(CHECK) kubectl installed: %s\n" "$$(kubectl version --client --short 2>/dev/null || kubectl version --client)"; \
@@ -76,7 +80,7 @@ install:
 	@if ! command -v k3d >/dev/null 2>&1; then \
 		sudo -v || exit 1; \
 		$(call run_spinner,Installing k3d...,\
-			curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash) && \
+			curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=$(K3D_VERSION) bash) && \
 		printf "$(CHECK) k3d installed: %s\n" "$$(k3d version | head -1)"; \
 	else \
 		printf "$(CHECK) k3d already installed: %s\n" "$$(k3d version | head -1)"; \
@@ -84,7 +88,7 @@ install:
 	@if ! command -v helm >/dev/null 2>&1; then \
 		sudo -v || exit 1; \
 		$(call run_spinner,Installing helm...,\
-			curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash) && \
+			curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | DESIRED_VERSION=$(HELM_VERSION) bash) && \
 		printf "$(CHECK) helm installed: %s\n" "$$(helm version --short)"; \
 	else \
 		printf "$(CHECK) helm already installed: %s\n" "$$(helm version --short)"; \
@@ -149,6 +153,7 @@ up: install
 			helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx --force-update && \
 			helm repo update && \
 			helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+				 --version 4.15.1 \
 				 --namespace ingress-nginx --create-namespace \
 				 --set controller.service.type=LoadBalancer \
 				 --wait --timeout 180s)
@@ -170,6 +175,7 @@ deploy-kubo:
 deploy-lgtm-stack:
 	@$(call run_spinner,Deploying Loki...,\
 			helm upgrade --install loki grafana/loki \
+				--version 7.5.0 \
 				--namespace default \
 				--values k8s/helm/values-loki.yaml \
 				--wait --timeout 180s)
@@ -177,6 +183,7 @@ deploy-lgtm-stack:
 	@echo
 	@$(call run_spinner,Deploying Tempo...,\
 			helm upgrade --install tempo grafana-community/tempo \
+				--version 3.2.1 \
 				--namespace default \
 				--values k8s/helm/values-tempo.yaml \
 				--wait --timeout 180s)
@@ -184,6 +191,7 @@ deploy-lgtm-stack:
 	@echo
 	@$(call run_spinner,Deploying Mimir...,\
 			helm upgrade --install mimir grafana/mimir-distributed \
+				--version 6.2.1 \
 				--namespace default \
 				--values k8s/helm/values-mimir.yaml \
 				--wait --timeout 300s)
@@ -191,6 +199,7 @@ deploy-lgtm-stack:
 	@echo
 	@$(call run_spinner,Deploying OpenTelemetry Collector...,\
 			helm upgrade --install otel-collector open-telemetry/opentelemetry-collector \
+				--version 0.177.0 \
 				--namespace default \
 				--values k8s/helm/values-otel-collector.yaml \
 				--wait --timeout 120s)
@@ -198,6 +207,7 @@ deploy-lgtm-stack:
 	@echo
 	@$(call run_spinner,Deploying OpenTelemetry node agents...,\
 			helm upgrade --install otel-agent open-telemetry/opentelemetry-collector \
+				--version 0.177.0 \
 				--namespace default \
 				--values k8s/helm/values-otel-agent.yaml \
 				--wait --timeout 120s)
@@ -205,6 +215,7 @@ deploy-lgtm-stack:
 	@echo
 	@$(call run_spinner,Deploying Pyroscope...,\
 			helm upgrade --install pyroscope grafana/pyroscope \
+				--version 2.4.1 \
 				--namespace default \
 				--values k8s/helm/values-pyroscope.yaml \
 				--wait --timeout 180s)
@@ -228,6 +239,7 @@ deploy-lgtm-stack:
 	@echo
 	@$(call run_spinner,Deploying Grafana...,\
 			helm upgrade --install grafana grafana/grafana \
+				--version 10.5.15 \
 				--namespace default \
 				--values k8s/helm/values-grafana.yaml \
 				--wait --timeout 180s)
