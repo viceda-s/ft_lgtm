@@ -72,3 +72,11 @@ func TestExecutor_Run_AssemblyScriptConsole_RespectsOutputLimit(t *testing.T) {
 		t.Fatalf("expected the output limit to stop the program, got %d bytes (exceeded=%v)", len(result.Stdout), result.OutputLimitExceeded)
 	}
 }
+
+func TestExecutor_Run_CTableGrowth_IsCapped(t *testing.T) {
+	result := runProgram(t, "c", "#include <stdio.h>\ntypedef void (*__funcref funcref_t)(void);\nstatic funcref_t table[0];\n"+
+		"int main(void) {\n  printf(\"%d\\n\", __builtin_wasm_table_grow(table, __builtin_wasm_ref_null_func(), 50000000));\n  return 0;\n}\n")
+	if result.Stdout == "0\n" {
+		t.Fatalf("expected growing a table to 50M elements to fail, got %+v", result)
+	}
+}

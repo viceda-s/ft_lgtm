@@ -15,6 +15,8 @@ const epochTick = 10 * time.Millisecond
 
 const fuelBudget = 1 << 62
 
+const maxTableElements = 10000
+
 const (
 	wasiErrnoSuccess = 0
 	wasiErrnoBadf    = 8
@@ -70,7 +72,8 @@ func (e *Executor) Run(wasmBytes []byte, timeout time.Duration, maxOutputBytes i
 	store := wasmtime.NewStore(e.engine)
 	defer store.Close()
 	store.SetEpochDeadline(uint64(timeout/epochTick) + 1)
-	store.Limiter(int64(10*1024*1024), -1, -1, -1, -1)
+	// tables live in host memory too, so they are capped alongside the 10 MiB of linear memory
+	store.Limiter(int64(10*1024*1024), maxTableElements, -1, 1, 1)
 	if err := store.SetFuel(fuelBudget); err != nil {
 		return Result{}, fmt.Errorf("setting fuel: %w", err)
 	}
