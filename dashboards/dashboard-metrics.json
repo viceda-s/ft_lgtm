@@ -18,7 +18,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 0
+        "y": 4
       },
       "datasource": {
         "type": "prometheus",
@@ -57,7 +57,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 0
+        "y": 4
       },
       "datasource": {
         "type": "prometheus",
@@ -96,7 +96,7 @@
         "h": 8,
         "w": 16,
         "x": 0,
-        "y": 8
+        "y": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -135,7 +135,7 @@
         "h": 16,
         "w": 8,
         "x": 16,
-        "y": 0
+        "y": 4
       },
       "datasource": {
         "type": "prometheus",
@@ -161,6 +161,141 @@
           },
           "expr": "sum by (language) (increase(code_executions_total{language!=\"\"}[5m]))",
           "legendFormat": "{{language}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Successful executions",
+      "description": "Successful executions in the selected time range",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          },
+          "decimals": 0
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "round(sum(increase(code_executions_total{outcome=\"success\"}[$__range])))",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Successful executions"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Failed executions",
+      "description": "Failed executions in the selected time range",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          },
+          "decimals": 0
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "round(sum(increase(code_executions_total{outcome!=\"success\"}[$__range])))",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Failed executions"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Total executions",
+      "description": "All executions in the selected time range",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mimir"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          },
+          "decimals": 0
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mimir"
+          },
+          "expr": "round(sum(increase(code_executions_total[$__range])))",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Total executions"
         }
       ]
     }
