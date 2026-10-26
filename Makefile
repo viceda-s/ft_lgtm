@@ -5,9 +5,10 @@ K3D_CONFIG := k8s/k3d-cluster.yaml
 K3D_VERSION := v5.9.0
 HELM_VERSION := v3.22.1
 KUBECTL_VERSION := v1.35.5
+# only untagged images go: crictl rmi --prune also drops the current image from nodes not running it, and nothing can pull it back
 PRUNE_IMAGES = docker image prune -f --filter label=ft-lgtm >/dev/null; \
 	for node in $$(docker ps --filter label=k3d.cluster=$(K3D_CLUSTER_NAME) --format '{{.Names}}' | grep -E -- '-(server|agent)-'); do \
-		docker exec $$node crictl rmi --prune >/dev/null 2>&1; \
+		docker exec $$node sh -c "crictl images | awk '\$$1 == \"<none>\" {print \$$3}' | xargs -r crictl rmi" >/dev/null 2>&1; \
 	done
 
 GREEN  := \033[0;32m
