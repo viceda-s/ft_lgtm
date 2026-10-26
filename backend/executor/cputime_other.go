@@ -4,7 +4,6 @@ package executor
 
 import "time"
 
-
 func threadCPUTime() time.Duration {
-    return 0
+	return 0
 }

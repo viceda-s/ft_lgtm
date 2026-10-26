@@ -37,7 +37,7 @@ func TestCompile_InvalidProgram_ReturnsCompileError(t *testing.T) {
 func main() {
 	This is not valid Go syntax
 }`
-	_, err:= Compile(context.Background(), "go", source)
+	_, err := Compile(context.Background(), "go", source)
 	if err == nil {
 		t.Fatal("expected Compile to return an error for invalid syntax, got nil")
 	}
