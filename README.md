@@ -12,7 +12,7 @@ The goal is to demonstrate, end to end, how modern applications combine sandboxe
 
 ## Instructions
 
-The entire project runs inside a local Kubernetes cluster (k3d) provisioned by a single `Makefile`.
+The entire project runs inside a local Kubernetes cluster (k3d) provisioned by a single `Makefile`. It expects an Ubuntu or Debian VM and a user that can run `sudo` (Docker is installed from Docker's apt repository; on Debian, `sudo` is only set up if the installer was given no root password) and pins the versions of k3d, k3s, kubectl, Helm and every Helm chart, so a fresh VM gets the same stack this project was tested with.
 
 ```bash
 make         # same as make up
@@ -44,12 +44,18 @@ Once `make up` completes, the application and its services are reachable at:
 - playground: the example program and the display of stage timings, the trace link and truncated output;
 - infrastructure: Makefile fixes for fresh VMs, the backend image layer order, Kubo and Helm values fixes, and the tests covering these changes.
 
+A second Claude Code audit against the subject led to:
+
+- security: the 5-second limit now also covers sleeping programs (WASI `poll_oneoff` is replaced so a sleep past the deadline stops the run), WASM tables are capped next to the 10 MiB memory limit, and the cgo check also catches `` import `C` `` and other spellings of the import path;
+- infrastructure: pinned tool and Helm chart versions, Debian support in `make install`, a Go build cache in the backend image so rebuilds only recompile what changed, and an image cleanup that no longer deletes the current backend/frontend image from the k3d node that isn't running it;
+- dashboards: totals for the selected time range in Dashboard 1, and the slowest-executions table now covers up to 1000 runs.
+
 ## IPFS public reachability
 
 This project runs entirely inside a local VM, as required by the subject. IPFS is a peer-to-peer network, so public reachability depends on the underlying network configuration.
 
-- Inside the cluster/VM, the gateway is always available at: `http://ipfs.lgtm.local/ipfs/<CID>/main.go`
-- Public reachability (e.g. fetching the same CID via `https://ipfs.io/ipfs/<CID>/main.go`) requires the node to be reachable from the public internet. The subject explicitly allows explaining NAT limitations to evaluators:
+- Inside the cluster/VM, the gateway is always available at: `http://ipfs.lgtm.local/ipfs/<CID>/` (the directory holds `main.go`, `main.c`, `main.rs` or `main.ts`, plus `stdout.txt` and `stderr.txt`)
+- Public reachability (e.g. fetching the same CID via `https://ipfs.io/ipfs/<CID>/`) requires the node to be reachable from the public internet. The subject explicitly allows explaining NAT limitations to evaluators:
   > "If you are behind NAT without UPnP / IPv6, explain the limitations to your evaluators." [subject, V.1.4]
 
 The k3d load balancer publishes Kubo's swarm port (4001, TCP and UDP) on the VM; the RPC API (5001) is never exposed. Where router port-forwarding or a public/IPv6 address is available, the same CID is tested from another network. Note that forwarding the swarm port (4001) alone is a best-effort attempt, not a guarantee — Kubo may still announce internal cluster/pod addresses that a remote peer can't route to, depending on the network setup. Where reachability isn't achieved, this limitation is documented here and demonstrated locally via `ipfs.lgtm.local` instead.
