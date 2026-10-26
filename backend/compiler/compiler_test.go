@@ -87,15 +87,17 @@ func TestCompile_DeadlineExceeded_ReturnsTimeoutCompileError(t *testing.T) {
 }
 
 func TestCompile_Cgo_RejectedBeforeIncludingHostFiles(t *testing.T) {
-	source := "package main\n\n// #include \"/etc/hostname\"\nimport \"C\"\n\nfunc main() {}\n"
-	_, err := Compile(context.Background(), "go", source)
+	for _, path := range []string{`"C"`, "`C`", `"\x43"`} {
+		source := "package main\n\n// #include \"/etc/hostname\"\nimport " + path + "\n\nfunc main() {}\n"
+		_, err := Compile(context.Background(), "go", source)
 
-	var compileErr *CompileError
-	if !errors.As(err, &compileErr) {
-		t.Fatalf("expected error to be *CompileError, got %T: %v", err, err)
-	}
-	if !strings.Contains(compileErr.Stderr, "cgo") {
-		t.Fatalf("expected a cgo rejection message, got: %s", compileErr.Stderr)
+		var compileErr *CompileError
+		if !errors.As(err, &compileErr) {
+			t.Fatalf("import %s: expected error to be *CompileError, got %T: %v", path, err, err)
+		}
+		if !strings.Contains(compileErr.Stderr, "cgo") {
+			t.Fatalf("import %s: expected a cgo rejection message, got: %s", path, compileErr.Stderr)
+		}
 	}
 }
 

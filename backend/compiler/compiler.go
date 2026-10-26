@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -157,7 +158,8 @@ func rejectCgo(source string) error {
 		return nil
 	}
 	for _, imp := range f.Imports {
-		if imp.Path.Value == `"C"` {
+		// unquoted, so `C` and "\x43" are caught too: the go tool treats them all as cgo
+		if path, _ := strconv.Unquote(imp.Path.Value); path == "C" {
 			return &CompileError{Stderr: "main.go: cgo (import \"C\") is not allowed in the playground"}
 		}
 	}
